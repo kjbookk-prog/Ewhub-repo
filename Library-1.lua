@@ -3,13 +3,19 @@
 	 EWEHUB
 	 UI Library untuk Roblox — dibuat murni dengan Luau.
 	 Dibuat oleh: Asep
-	 Versi: 3.0.0
+	 Versi: 4.0.0
 
-	 Terinspirasi dari pola pemakaian library seperti Rayfield (Sirius):
-	 1. File ini adalah LIBRARY itu sendiri — cukup di-loadstring/require,
-	    lalu panggil EWEHUB:CreateWindow{...} dari script kamu sendiri.
-	 2. Library ini TIDAK membuat UI apapun secara otomatis saat dimuat.
-	 3. Lihat file "Example.lua" untuk contoh pemakaian lengkap.
+	 CATATAN PERUBAHAN v4.0.0:
+	 1. Layout utama sekarang HORIZONTAL (lebih lebar, lebih pendek)
+	    supaya tidak terlalu menutupi layar pemain.
+	 2. Semua frame memakai rounded corner yang konsisten (desain modern).
+	 3. ScreenGui memakai DisplayOrder tinggi supaya selalu di layer
+	    paling atas dan tidak tertutup GUI lain.
+	 4. Tambahan opening cutscene (fade in/out + skip) saat window
+	    pertama kali dibuat.
+	 5. Tambahan sistem Discord Join Notification (opsional, bisa
+	    dimatikan lewat config).
+	 6. Transisi tab & buka/tutup window lebih halus (custom easing).
 
 	 CARA MEMUAT (jika dihosting, mis. di GitHub raw):
 	   local EWEHUB = loadstring(game:HttpGet("URL_RAW_KAMU"))()
@@ -33,11 +39,15 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local EWEHUB = {}
 EWEHUB.__index = EWEHUB
 
-EWEHUB.Version  = "3.0.0"
+EWEHUB.Version  = "4.0.0"
 EWEHUB.Author   = "Asep"
 EWEHUB.Windows  = {}
 EWEHUB.Flags    = {}
 EWEHUB.ConfigCallbacks = {}
+
+-- ScreenGui semua elemen library selalu memakai DisplayOrder ini
+-- supaya tetap berada di layer teratas, di atas GUI game lain.
+EWEHUB.DisplayOrder = 999
 
 EWEHUB.Theme = {
 	Background   = Color3.fromRGB(14, 14, 14),
@@ -49,11 +59,14 @@ EWEHUB.Theme = {
 	Text         = Color3.fromRGB(235, 235, 235),
 	SubText      = Color3.fromRGB(145, 145, 145),
 	Danger       = Color3.fromRGB(255, 80, 80),
+	-- Radius sudut default — dipakai supaya semua elemen konsisten "tumpul"
+	CornerRadius = 14,
 }
 
-local FastTween   = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local MediumTween = TweenInfo.new(0.32, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-local SlowTween   = TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local FastTween   = TweenInfo.new(0.16, Enum.EasingStyle.Quad,  Enum.EasingDirection.Out)
+local MediumTween = TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local SlowTween   = TweenInfo.new(0.42, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local SoftTween   = TweenInfo.new(0.35, Enum.EasingStyle.Sine,  Enum.EasingDirection.InOut)
 
 --============================================================
 -- UTIL
@@ -71,7 +84,9 @@ local function New(class, props, children)
 	return inst
 end
 
-local function Corner(radius) return New("UICorner", { CornerRadius = UDim.new(0, radius or 8) }) end
+local function Corner(radius)
+	return New("UICorner", { CornerRadius = UDim.new(0, radius or EWEHUB.Theme.CornerRadius) })
+end
 
 local function Stroke(color, thickness)
 	return New("UIStroke", {
@@ -92,6 +107,18 @@ end
 
 local function IsMobile()
 	return UserInputService.TouchEnabled and not UserInputService.MouseEnabled
+end
+
+-- Membuat ScreenGui baru yang selalu diposisikan di layer paling atas
+local function NewTopScreenGui(name)
+	return New("ScreenGui", {
+		Name = name,
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = EWEHUB.DisplayOrder,
+		Parent = PlayerGui,
+	})
 end
 
 --============================================================
@@ -221,13 +248,7 @@ local NotifGui, NotifContainer
 
 local function EnsureNotifRoot()
 	if NotifGui and NotifGui.Parent then return end
-	NotifGui = New("ScreenGui", {
-		Name = "EWEHUB_Notifications",
-		ResetOnSpawn = false,
-		IgnoreGuiInset = true,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		Parent = PlayerGui,
-	})
+	NotifGui = NewTopScreenGui("EWEHUB_Notifications")
 	NotifContainer = New("Frame", {
 		Size = UDim2.new(0, 280, 1, -20),
 		Position = UDim2.new(1, -300, 0, 10),
@@ -312,54 +333,257 @@ function EWEHUB:Notify(config)
 end
 
 --============================================================
--- LOADING SCREEN (branding "EWEHUB by Asep")
+-- OPENING CUTSCENE (fade in/out + logo + tombol Skip)
 --============================================================
-local function PlayLoadingScreen(screenGui, windowName, callback)
+local function PlayCutscene(screenGui, windowName, callback)
 	local Splash = New("Frame", {
 		Size = UDim2.new(1, 0, 1, 0),
 		BackgroundColor3 = EWEHUB.Theme.Background,
-		ZIndex = 50,
+		BackgroundTransparency = 1,
+		ZIndex = 100,
 		Parent = screenGui,
+	})
+
+	-- "Logo" sederhana: lingkaran ber-accent + inisial, tanpa aset eksternal
+	local LogoRing = New("Frame", {
+		Size = UDim2.new(0, 64, 0, 64),
+		Position = UDim2.new(0.5, -32, 0.5, -78),
+		BackgroundColor3 = EWEHUB.Theme.Panel,
+		BackgroundTransparency = 1,
+		ZIndex = 101,
+		Parent = Splash,
+	}, { Corner(32), Stroke(EWEHUB.Theme.Accent, 2) })
+
+	local LogoText = New("TextLabel", {
+		Text = "E",
+		Font = Enum.Font.GothamBlack,
+		TextSize = 30,
+		TextColor3 = EWEHUB.Theme.Accent,
+		TextTransparency = 1,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 1, 0),
+		ZIndex = 102,
+		Parent = LogoRing,
 	})
 
 	local Title = New("TextLabel", {
 		Text = windowName,
 		Font = Enum.Font.GothamBold,
-		TextSize = 30,
+		TextSize = 26,
 		TextColor3 = EWEHUB.Theme.Text,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 40),
-		Position = UDim2.new(0, 0, 0.5, -40),
+		Size = UDim2.new(1, 0, 0, 36),
+		Position = UDim2.new(0, 0, 0.5, 4),
 		TextTransparency = 1,
-		ZIndex = 51,
+		ZIndex = 101,
 		Parent = Splash,
 	})
 
 	local Subtitle = New("TextLabel", {
-		Text = "by " .. EWEHUB.Author,
+		Text = "by " .. EWEHUB.Author .. "  •  v" .. EWEHUB.Version,
 		Font = Enum.Font.Gotham,
-		TextSize = 14,
-		TextColor3 = EWEHUB.Theme.Accent,
+		TextSize = 13,
+		TextColor3 = EWEHUB.Theme.SubText,
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 0, 20),
-		Position = UDim2.new(0, 0, 0.5, 4),
+		Position = UDim2.new(0, 0, 0.5, 40),
 		TextTransparency = 1,
-		ZIndex = 51,
+		ZIndex = 101,
 		Parent = Splash,
 	})
 
-	Tween(Title, MediumTween, { TextTransparency = 0 })
-	Tween(Subtitle, MediumTween, { TextTransparency = 0.15 })
+	local SkipBtn = New("TextButton", {
+		Text = "Skip ›",
+		Font = Enum.Font.GothamMedium,
+		TextSize = 13,
+		TextColor3 = EWEHUB.Theme.SubText,
+		BackgroundColor3 = EWEHUB.Theme.PanelLight,
+		BackgroundTransparency = 1,
+		TextTransparency = 1,
+		Size = UDim2.new(0, 74, 0, 30),
+		Position = UDim2.new(1, -94, 1, -50),
+		AutoButtonColor = false,
+		ZIndex = 101,
+		Parent = Splash,
+	}, { Corner(8) })
 
-	task.delay(0.9, function()
+	local finished = false
+	local function Finish()
+		if finished then return end
+		finished = true
+		Tween(Splash, MediumTween, { BackgroundTransparency = 1 })
+		Tween(LogoRing, FastTween, { BackgroundTransparency = 1 })
+		Tween(LogoText, FastTween, { TextTransparency = 1 })
 		Tween(Title, FastTween, { TextTransparency = 1 })
 		Tween(Subtitle, FastTween, { TextTransparency = 1 })
-		Tween(Splash, MediumTween, { BackgroundTransparency = 1 })
+		Tween(SkipBtn, FastTween, { TextTransparency = 1, BackgroundTransparency = 1 })
 		task.delay(0.3, function()
 			Splash:Destroy()
 			if callback then callback() end
 		end)
+	end
+
+	SkipBtn.MouseEnter:Connect(function()
+		Tween(SkipBtn, FastTween, { BackgroundTransparency = 0, TextColor3 = EWEHUB.Theme.Text })
 	end)
+	SkipBtn.MouseLeave:Connect(function()
+		Tween(SkipBtn, FastTween, { BackgroundTransparency = 1, TextColor3 = EWEHUB.Theme.SubText })
+	end)
+	SkipBtn.MouseButton1Click:Connect(Finish)
+
+	-- Urutan animasi fade-in
+	Tween(Splash, MediumTween, { BackgroundTransparency = 0 })
+	Tween(LogoRing, MediumTween, { BackgroundTransparency = 0 })
+	Tween(LogoText, MediumTween, { TextTransparency = 0 })
+	task.delay(0.1, function()
+		Tween(Title, MediumTween, { TextTransparency = 0 })
+	end)
+	task.delay(0.2, function()
+		Tween(Subtitle, MediumTween, { TextTransparency = 0.1 })
+		Tween(SkipBtn, MediumTween, { TextTransparency = 0.3 })
+	end)
+
+	-- Auto-selesai jika tidak di-skip
+	task.delay(1.4, Finish)
+end
+
+--============================================================
+-- DISCORD JOIN NOTIFICATION
+--============================================================
+local function SetupDiscordNotification(EWEHUBRef, screenGui, Theme, discordConfig)
+	if not discordConfig or not discordConfig.Enabled then return end
+
+	local invite = discordConfig.Invite or ""
+	local interval = discordConfig.Interval or 300 -- default 5 menit
+	local joined = false
+	local active = true
+
+	local function ShowPopup()
+		if not active or joined then return end
+
+		local Overlay = New("Frame", {
+			Size = UDim2.new(1, 0, 1, 0),
+			BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 1,
+			ZIndex = 80,
+			Parent = screenGui,
+		})
+
+		local Popup = New("Frame", {
+			Size = UDim2.new(0, 320, 0, 150),
+			Position = UDim2.new(0.5, -160, 0.5, -75),
+			BackgroundColor3 = Theme.Panel,
+			ZIndex = 81,
+			Parent = Overlay,
+		}, { Corner(14), Stroke(Theme.Accent, 1) })
+
+		New("TextLabel", {
+			Text = "Gabung Discord Kami!",
+			Font = Enum.Font.GothamBold,
+			TextSize = 16,
+			TextColor3 = Theme.Text,
+			BackgroundTransparency = 1,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Position = UDim2.new(0, 16, 0, 14),
+			Size = UDim2.new(1, -32, 0, 22),
+			ZIndex = 81,
+			Parent = Popup,
+		})
+
+		New("TextLabel", {
+			Text = "Dapatkan update, bantuan, dan info terbaru dengan bergabung ke server Discord kami.",
+			Font = Enum.Font.Gotham,
+			TextSize = 13,
+			TextColor3 = Theme.SubText,
+			TextWrapped = true,
+			BackgroundTransparency = 1,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Position = UDim2.new(0, 16, 0, 42),
+			Size = UDim2.new(1, -32, 0, 50),
+			ZIndex = 81,
+			Parent = Popup,
+		})
+
+		local JoinBtn = New("TextButton", {
+			Text = "Join Discord",
+			Font = Enum.Font.GothamBold,
+			TextSize = 14,
+			TextColor3 = Color3.fromRGB(10, 10, 10),
+			BackgroundColor3 = Theme.Accent,
+			AutoButtonColor = false,
+			Position = UDim2.new(0, 16, 1, -46),
+			Size = UDim2.new(1, -84, 0, 32),
+			ZIndex = 81,
+			Parent = Popup,
+		}, { Corner(8) })
+
+		local CloseBtn = New("TextButton", {
+			Text = "✕",
+			Font = Enum.Font.GothamBold,
+			TextSize = 13,
+			TextColor3 = Theme.SubText,
+			BackgroundColor3 = Theme.PanelLight,
+			AutoButtonColor = false,
+			Position = UDim2.new(1, -56, 1, -46),
+			Size = UDim2.new(0, 40, 0, 32),
+			ZIndex = 81,
+			Parent = Popup,
+		}, { Corner(8) })
+
+		local function DestroyPopup()
+			Tween(Popup, FastTween, { Position = UDim2.new(0.5, -160, 0.5, -60) })
+			Tween(Overlay, MediumTween, { BackgroundTransparency = 1 })
+			Tween(Popup, MediumTween, { BackgroundTransparency = 1 })
+			task.delay(0.3, function() Overlay:Destroy() end)
+		end
+
+		JoinBtn.MouseButton1Click:Connect(function()
+			if typeof(setclipboard) == "function" then
+				pcall(setclipboard, invite)
+				EWEHUBRef:Notify({
+					Title = "Discord",
+					Content = "Link Discord berhasil disalin ke clipboard!",
+					Duration = 4,
+				})
+			else
+				EWEHUBRef:Notify({
+					Title = "Discord",
+					Content = "Buka link berikut untuk join: " .. invite,
+					Duration = 6,
+				})
+			end
+			joined = true
+			DestroyPopup()
+		end)
+
+		CloseBtn.MouseButton1Click:Connect(DestroyPopup)
+		CloseBtn.MouseEnter:Connect(function() Tween(CloseBtn, FastTween, { BackgroundColor3 = Theme.Danger }) end)
+		CloseBtn.MouseLeave:Connect(function() Tween(CloseBtn, FastTween, { BackgroundColor3 = Theme.PanelLight }) end)
+
+		Popup.Position = UDim2.new(0.5, -160, 0.5, -60)
+		Popup.BackgroundTransparency = 1
+		Tween(Overlay, MediumTween, { BackgroundTransparency = 0.4 })
+		Tween(Popup, SlowTween, { BackgroundTransparency = 0, Position = UDim2.new(0.5, -160, 0.5, -75) })
+	end
+
+	-- Tampilkan pertama kali beberapa detik setelah UI utama muncul
+	task.delay(2, ShowPopup)
+
+	-- Pengingat berkala setiap `interval` detik selama sesi berjalan
+	task.spawn(function()
+		while active and not joined do
+			task.wait(interval)
+			if active and not joined then
+				ShowPopup()
+			end
+		end
+	end)
+
+	return {
+		Disable = function() active = false end,
+		Enable = function() active = true end,
+		MarkJoined = function() joined = true end,
+	}
 end
 
 --============================================================
@@ -370,20 +594,19 @@ function EWEHUB:CreateWindow(config)
 	local windowName  = config.Name or "EWEHUB"
 	local toggleKey   = config.ToggleKey or Enum.KeyCode.RightControl
 	local Theme       = self.Theme
+	local discordCfg  = config.Discord -- { Enabled, Invite, Interval }
 
 	local guiName = "EWEHUB_" .. windowName
 	local existing = PlayerGui:FindFirstChild(guiName)
 	if existing then existing:Destroy() end
 
-	local ScreenGui = New("ScreenGui", {
-		Name = guiName,
-		ResetOnSpawn = false,
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		IgnoreGuiInset = true,
-		Parent = PlayerGui,
-	})
+	local ScreenGui = NewTopScreenGui(guiName)
 
-	local windowSize = IsMobile() and UDim2.new(0, 340, 0, 420) or UDim2.new(0, 560, 0, 380)
+	-- Layout HORIZONTAL: lebih lebar, jauh lebih pendek daripada versi lama,
+	-- supaya tidak menutupi layar pemain secara vertikal.
+	local windowSize = IsMobile()
+		and UDim2.new(0, 400, 0, 250)
+		or UDim2.new(0, 640, 0, 300)
 
 	local Main = New("Frame", {
 		Name = "Main",
@@ -394,19 +617,19 @@ function EWEHUB:CreateWindow(config)
 		ClipsDescendants = true,
 		Visible = false,
 		Parent = ScreenGui,
-	}, { Corner(12), Stroke(Theme.Stroke, 1) })
+	}, { Corner(16), Stroke(Theme.Stroke, 1) })
 
 	-- TOP BAR
 	local TopBar = New("Frame", {
-		Size = UDim2.new(1, 0, 0, 46),
+		Size = UDim2.new(1, 0, 0, 42),
 		BackgroundColor3 = Theme.Panel,
 		BorderSizePixel = 0,
 		Parent = Main,
-	}, { Corner(12) })
+	}, { Corner(16) })
 
 	New("Frame", {
-		Size = UDim2.new(1, 0, 0, 12),
-		Position = UDim2.new(0, 0, 1, -12),
+		Size = UDim2.new(1, 0, 0, 16),
+		Position = UDim2.new(0, 0, 1, -16),
 		BackgroundColor3 = Theme.Panel,
 		BorderSizePixel = 0,
 		Parent = TopBar,
@@ -422,7 +645,7 @@ function EWEHUB:CreateWindow(config)
 	New("TextLabel", {
 		Text = windowName,
 		Font = Enum.Font.GothamBold,
-		TextSize = 16,
+		TextSize = 15,
 		TextColor3 = Theme.Text,
 		BackgroundTransparency = 1,
 		TextXAlignment = Enum.TextXAlignment.Left,
@@ -443,11 +666,11 @@ function EWEHUB:CreateWindow(config)
 	local CloseBtn = New("TextButton", {
 		Text = "✕",
 		Font = Enum.Font.GothamBold,
-		TextSize = 14,
+		TextSize = 13,
 		TextColor3 = Theme.SubText,
 		BackgroundColor3 = Theme.PanelLight,
-		Size = UDim2.new(0, 30, 0, 30),
-		Position = UDim2.new(1, -40, 0.5, -15),
+		Size = UDim2.new(0, 28, 0, 28),
+		Position = UDim2.new(1, -37, 0.5, -14),
 		AutoButtonColor = false,
 		Parent = TopBar,
 	}, { Corner(8) })
@@ -455,11 +678,11 @@ function EWEHUB:CreateWindow(config)
 	local MinimizeBtn = New("TextButton", {
 		Text = "—",
 		Font = Enum.Font.GothamBold,
-		TextSize = 18,
+		TextSize = 16,
 		TextColor3 = Theme.SubText,
 		BackgroundColor3 = Theme.PanelLight,
-		Size = UDim2.new(0, 30, 0, 30),
-		Position = UDim2.new(1, -76, 0.5, -15),
+		Size = UDim2.new(0, 28, 0, 28),
+		Position = UDim2.new(1, -70, 0.5, -14),
 		AutoButtonColor = false,
 		Parent = TopBar,
 	}, { Corner(8) })
@@ -486,7 +709,7 @@ function EWEHUB:CreateWindow(config)
 	local function Minimize()
 		isMinimized = true
 		Tween(Main, MediumTween, { Size = UDim2.new(Main.Size.X.Scale, Main.Size.X.Offset, 0, 0), BackgroundTransparency = 1 })
-		task.delay(0.28, function()
+		task.delay(0.26, function()
 			Main.Visible = false
 			FloatIcon.Visible = true
 			Tween(FloatIcon, SlowTween, { Size = UDim2.new(0, 50, 0, 50) })
@@ -496,7 +719,7 @@ function EWEHUB:CreateWindow(config)
 	local function Restore()
 		isMinimized = false
 		Tween(FloatIcon, FastTween, { Size = UDim2.new(0, 0, 0, 0) })
-		task.delay(0.15, function()
+		task.delay(0.14, function()
 			FloatIcon.Visible = false
 			Main.Visible = true
 			Main.Size = UDim2.new(windowSize.X.Scale, windowSize.X.Offset, 0, 0)
@@ -518,10 +741,12 @@ function EWEHUB:CreateWindow(config)
 		end
 	end)
 
-	local TabListWidth = IsMobile() and 90 or 130
+	-- Sidebar tab tetap di kiri (sudah horizontal terhadap konten),
+	-- tapi dibuat ramping karena tinggi window sekarang lebih pendek.
+	local TabListWidth = IsMobile() and 84 or 118
 	local TabList = New("Frame", {
-		Size = UDim2.new(0, TabListWidth, 1, -46),
-		Position = UDim2.new(0, 0, 0, 46),
+		Size = UDim2.new(0, TabListWidth, 1, -42),
+		Position = UDim2.new(0, 0, 0, 42),
 		BackgroundColor3 = Theme.Panel,
 		BorderSizePixel = 0,
 		Parent = Main,
@@ -530,10 +755,11 @@ function EWEHUB:CreateWindow(config)
 	Padding(10).Parent = TabList
 
 	local ContentArea = New("Frame", {
-		Size = UDim2.new(1, -TabListWidth, 1, -46),
-		Position = UDim2.new(0, TabListWidth, 0, 46),
+		Size = UDim2.new(1, -TabListWidth, 1, -42),
+		Position = UDim2.new(0, TabListWidth, 0, 42),
 		BackgroundColor3 = Theme.Background,
 		BorderSizePixel = 0,
+		ClipsDescendants = true,
 		Parent = Main,
 	})
 
@@ -542,11 +768,26 @@ function EWEHUB:CreateWindow(config)
 	Window._firstTab = nil
 	Window.ScreenGui = ScreenGui
 	Window.Main = Main
+	Window.Discord = nil
 
 	function Window:Destroy()
-		if NotifGui then end -- notifikasi tetap independen, tidak ikut dihapus
+		if Window.Discord then Window.Discord.Disable() end
 		ScreenGui:Destroy()
 		EWEHUB.Windows[windowName] = nil
+	end
+
+	-- Kontrol manual untuk fitur Discord (bisa dipanggil setelah CreateWindow)
+	function Window:SetDiscordNotification(enabled, invite, interval)
+		if Window.Discord then Window.Discord.Disable() end
+		if enabled then
+			Window.Discord = SetupDiscordNotification(EWEHUB, ScreenGui, Theme, {
+				Enabled = true,
+				Invite = invite or (discordCfg and discordCfg.Invite) or "",
+				Interval = interval or (discordCfg and discordCfg.Interval) or 300,
+			})
+		else
+			Window.Discord = nil
+		end
 	end
 
 	CloseBtn.MouseButton1Click:Connect(function()
@@ -562,10 +803,10 @@ function EWEHUB:CreateWindow(config)
 		local TabButton = New("TextButton", {
 			Text = tabIcon and (tabIcon .. "  " .. tabName) or tabName,
 			Font = Enum.Font.GothamMedium,
-			TextSize = 14,
+			TextSize = 13,
 			TextColor3 = Theme.SubText,
 			BackgroundColor3 = Theme.PanelLight,
-			Size = UDim2.new(1, 0, 0, 34),
+			Size = UDim2.new(1, 0, 0, 32),
 			AutoButtonColor = false,
 			Parent = TabList,
 		}, { Corner(8) })
@@ -580,6 +821,7 @@ function EWEHUB:CreateWindow(config)
 			ScrollBarImageColor3 = Theme.Accent,
 			CanvasSize = UDim2.new(0, 0, 0, 0),
 			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			GroupTransparency = 0,
 			Visible = false,
 			Parent = ContentArea,
 		})
@@ -587,13 +829,25 @@ function EWEHUB:CreateWindow(config)
 
 		local Tab = { Button = TabButton, Page = Page }
 
+		-- Transisi tab: fade + sedikit slide, lebih halus daripada sekadar Visible toggle
 		local function SelectTab()
 			for _, t in pairs(Window.Tabs) do
-				t.Page.Visible = false
-				Tween(t.Button, FastTween, { BackgroundColor3 = Theme.PanelLight, TextColor3 = Theme.SubText })
+				if t.Page.Visible and t.Page ~= Page then
+					local oldPage = t.Page
+					Tween(t.Button, FastTween, { BackgroundColor3 = Theme.PanelLight, TextColor3 = Theme.SubText })
+					task.spawn(function()
+						oldPage.Position = oldPage.Position
+						oldPage.Visible = false
+					end)
+				else
+					Tween(t.Button, FastTween, { BackgroundColor3 = Theme.PanelLight, TextColor3 = Theme.SubText })
+				end
 			end
+
+			Page.Position = UDim2.new(0, 6, 0, 10)
 			Page.Visible = true
 			Tween(TabButton, FastTween, { BackgroundColor3 = Theme.AccentDark, TextColor3 = Theme.Text })
+			Tween(Page, SoftTween, { Position = UDim2.new(0, 10, 0, 10) })
 		end
 
 		TabButton.MouseButton1Click:Connect(SelectTab)
@@ -622,7 +876,7 @@ function EWEHUB:CreateWindow(config)
 			local Btn = New("TextButton", {
 				Text = opt.Name or "Button", Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = Theme.Text,
 				BackgroundColor3 = Theme.Panel, Size = UDim2.new(1, 0, 0, 36), AutoButtonColor = false, Parent = Page,
-			}, { Corner(8), Stroke() })
+			}, { Corner(10), Stroke() })
 
 			Btn.MouseEnter:Connect(function() Tween(Btn, FastTween, { BackgroundColor3 = Theme.AccentDark }) end)
 			Btn.MouseLeave:Connect(function() Tween(Btn, FastTween, { BackgroundColor3 = Theme.Panel }) end)
@@ -639,7 +893,7 @@ function EWEHUB:CreateWindow(config)
 			local state = opt.Default or false
 			local flagName = opt.Flag or opt.Name
 
-			local Holder = New("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel, Parent = Page }, { Corner(8), Stroke() })
+			local Holder = New("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel, Parent = Page }, { Corner(10), Stroke() })
 			New("TextLabel", {
 				Text = opt.Name or "Toggle", Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = Theme.Text,
 				TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
@@ -683,7 +937,7 @@ function EWEHUB:CreateWindow(config)
 			local value = opt.Default or min
 			local flagName = opt.Flag or opt.Name
 
-			local Holder = New("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundColor3 = Theme.Panel, Parent = Page }, { Corner(8), Stroke() })
+			local Holder = New("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundColor3 = Theme.Panel, Parent = Page }, { Corner(10), Stroke() })
 			New("TextLabel", {
 				Text = opt.Name or "Slider", Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = Theme.Text,
 				TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
@@ -754,7 +1008,7 @@ function EWEHUB:CreateWindow(config)
 			local Holder = New("Frame", {
 				Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel,
 				ClipsDescendants = true, ZIndex = 5, Parent = Page,
-			}, { Corner(8), Stroke() })
+			}, { Corner(10), Stroke() })
 
 			local MainRow = New("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 36), ZIndex = 5, Parent = Holder })
 
@@ -837,7 +1091,7 @@ function EWEHUB:CreateWindow(config)
 			opt = opt or {}
 			local flagName = opt.Flag or opt.Name
 
-			local Holder = New("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel, Parent = Page }, { Corner(8), Stroke() })
+			local Holder = New("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel, Parent = Page }, { Corner(10), Stroke() })
 			local Box = New("TextBox", {
 				Text = opt.Default or "", PlaceholderText = opt.Placeholder or opt.Name or "Enter text...",
 				Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = Theme.Text, PlaceholderColor3 = Theme.SubText,
@@ -866,12 +1120,17 @@ function EWEHUB:CreateWindow(config)
 
 	self.Windows[windowName] = Window
 
-	-- tampilkan loading screen lalu window
+	-- Tampilkan cutscene pembuka, lalu window utama, lalu (opsional) popup Discord
 	Main.Visible = true
 	Main.Size = UDim2.new(windowSize.X.Scale, windowSize.X.Offset, 0, 0)
 	Main.BackgroundTransparency = 1
-	PlayLoadingScreen(ScreenGui, windowName, function()
+
+	PlayCutscene(ScreenGui, windowName, function()
 		Tween(Main, SlowTween, { Size = windowSize, BackgroundTransparency = 0 })
+
+		if discordCfg and discordCfg.Enabled then
+			Window.Discord = SetupDiscordNotification(EWEHUB, ScreenGui, Theme, discordCfg)
+		end
 	end)
 
 	return Window
