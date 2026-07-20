@@ -899,7 +899,6 @@ function EWEHUB:CreateWindow(config)
 			ScrollBarImageColor3 = Theme.Accent,
 			CanvasSize = UDim2.new(0, 0, 0, 0),
 			AutomaticCanvasSize = Enum.AutomaticSize.Y,
-			GroupTransparency = 0,
 			Visible = false,
 			Parent = ContentArea,
 		})
