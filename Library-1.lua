@@ -3,7 +3,23 @@
 	 EWEHUB
 	 UI Library untuk Roblox — dibuat murni dengan Luau.
 	 Dibuat oleh: Asep
-	 Versi: 4.1.5
+	 Versi: 4.2.0
+
+	 CATATAN PERUBAHAN v4.2.0 (fitur baru):
+	 1. RELIABILITAS: semua Callback sekarang dibungkus SafeCall (pcall) —
+	    kalau ada 1 elemen yang error, elemen lain tetap jalan normal,
+	    dan user dikasih toast notifikasi error alih-alih diam-diam gagal.
+	 2. Proteksi GUI otomatis (protectgui/syn.protect_gui) kalau executor
+	    mendukung, supaya UI tidak mudah dideteksi/diutak-atik dari luar.
+	 3. Search bar di tiap tab — filter elemen berdasarkan nama secara live.
+	 4. Watermark kecil yang tetap terlihat walau window di-minimize,
+	    menampilkan nama hub, FPS, dan ping.
+	 5. Panel "Konfigurasi" (Save/Load/Delete) langsung di tab Pengaturan,
+	    memakai backend EWEHUB.SafeIO yang sudah ada.
+	 6. Tab:CreateColorPicker — pilih warna (R/G/B) + hex, dengan preview.
+	 7. Tab:CreateKeybind — user bisa bind tombol sendiri ke suatu aksi.
+	 8. Tab:CreateDropdown sekarang mendukung `Multi = true` untuk pilih
+	    lebih dari satu opsi sekaligus (checkbox-style).
 
 	 CATATAN PERUBAHAN v4.0.0:
 	 1. Layout utama sekarang HORIZONTAL (lebih lebar, lebih pendek)
@@ -17,7 +33,7 @@
 	    dimatikan lewat config).
 	 6. Transisi tab & buka/tutup window lebih halus (custom easing).
 
-	 CATATAN PERUBAHAN v4.1.0 - v4.1.5 (perbaikan dari laporan bug):
+	 CATATAN PERUBAHAN v4.1.0 (perbaikan dari laporan bug):
 	 1. FIX: UI tidak bisa dipencet ketika bentrok dengan library lain
 	    (mis. Rayfield). ScreenGui sekarang diparent ke gethui()/CoreGui
 	    (kalau tersedia di executor) dan DisplayOrder dinaikkan ke nilai
@@ -35,7 +51,7 @@
 	    info versi library.
 
 	 CARA MEMUAT (jika dihosting, mis. di GitHub raw):
-	   local EWEHUB = loadstring(game:HttpGet("URL_RAW_KAMU"))()
+	   local EWEHUB = loadstring(game:HttpGet("https://raw.githubusercontent.com/kjbookk-prog/Ewhub-repo/refs/heads/main/Library-1.lua"))()
 
 	 CARA MEMUAT (sebagai ModuleScript di dalam game):
 	   local EWEHUB = require(path.to.Library)
@@ -56,7 +72,7 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local EWEHUB = {}
 EWEHUB.__index = EWEHUB
 
-EWEHUB.Version  = "4.1.0"
+EWEHUB.Version  = "4.2.0"
 EWEHUB.Author   = "Asep"
 EWEHUB.Windows  = {}
 EWEHUB.Flags    = {}
