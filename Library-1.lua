@@ -157,15 +157,17 @@ end
 
 local GuiParent = GetGuiParent()
 
--- Membuat ScreenGui baru yang selalu diposisikan di layer paling atas
-local function NewTopScreenGui(name)
+-- Membuat ScreenGui baru yang selalu diposisikan di layer paling atas.
+-- parentOverride opsional — dipakai kalau ada window yang mau memaksa
+-- parent tertentu (mis. ForcePlayerGui = true di config CreateWindow).
+local function NewTopScreenGui(name, parentOverride)
 	return New("ScreenGui", {
 		Name = name,
 		ResetOnSpawn = false,
 		IgnoreGuiInset = true,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		DisplayOrder = EWEHUB.DisplayOrder,
-		Parent = GuiParent,
+		Parent = parentOverride or GuiParent,
 	})
 end
 
@@ -653,7 +655,7 @@ function EWEHUB:CreateWindow(config)
 		if existing then existing:Destroy() end
 	end
 
-	local ScreenGui = NewTopScreenGui(guiName)
+	local ScreenGui = NewTopScreenGui(guiName, config.ForcePlayerGui and PlayerGui or nil)
 
 	-- Layout HORIZONTAL: lebih lebar, jauh lebih pendek daripada versi lama,
 	-- supaya tidak menutupi layar pemain secara vertikal.
