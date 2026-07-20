@@ -3,7 +3,7 @@
 	 EWEHUB
 	 UI Library untuk Roblox — dibuat murni dengan Luau.
 	 Dibuat oleh: Asep
-	 Versi: 4.0.0
+	 Versi: 4.1.0
 
 	 CATATAN PERUBAHAN v4.0.0:
 	 1. Layout utama sekarang HORIZONTAL (lebih lebar, lebih pendek)
@@ -16,6 +16,23 @@
 	 5. Tambahan sistem Discord Join Notification (opsional, bisa
 	    dimatikan lewat config).
 	 6. Transisi tab & buka/tutup window lebih halus (custom easing).
+
+	 CATATAN PERUBAHAN v4.1.0 (perbaikan dari laporan bug):
+	 1. FIX: UI tidak bisa dipencet ketika bentrok dengan library lain
+	    (mis. Rayfield). ScreenGui sekarang diparent ke gethui()/CoreGui
+	    (kalau tersedia di executor) dan DisplayOrder dinaikkan ke nilai
+	    maksimum, supaya selalu menerima input paling pertama.
+	 2. FIX: sudut bawah window masih terlihat "kotak" (siku), padahal
+	    parent-nya sudah dibuat rounded. Ini bug klasik Roblox: Frame
+	    dengan ClipsDescendants hanya meng-clip ke bounding box persegi,
+	    BUKAN ke bentuk melengkung UICorner. Sekarang TabList & ContentArea
+	    (yang sebelumnya persegi polos) diberi UICorner sendiri supaya
+	    sudutnya benar-benar melengkung mengikuti Main.
+	 3. BARU: tab "⚙ Pengaturan" bawaan yang SELALU ada di paling ujung
+	    (bawah) daftar tab, tidak bisa dihapus/diubah lewat API publik.
+	    Isinya: foto profil (headshot) pemain, nama & UserId, HWID
+	    (kalau executor mendukung gethwid/get_hwid), nama executor, dan
+	    info versi library.
 
 	 CARA MEMUAT (jika dihosting, mis. di GitHub raw):
 	   local EWEHUB = loadstring(game:HttpGet("URL_RAW_KAMU"))()
@@ -39,15 +56,17 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local EWEHUB = {}
 EWEHUB.__index = EWEHUB
 
-EWEHUB.Version  = "4.0.0"
+EWEHUB.Version  = "4.1.0"
 EWEHUB.Author   = "Asep"
 EWEHUB.Windows  = {}
 EWEHUB.Flags    = {}
 EWEHUB.ConfigCallbacks = {}
 
 -- ScreenGui semua elemen library selalu memakai DisplayOrder ini
--- supaya tetap berada di layer teratas, di atas GUI game lain.
-EWEHUB.DisplayOrder = 999
+-- supaya tetap berada di layer teratas, di atas GUI game/library lain.
+-- Dipakai nilai maksimum Int32 supaya menang lawan library manapun
+-- yang juga mencoba pakai DisplayOrder tinggi (mis. Rayfield).
+EWEHUB.DisplayOrder = 2147483647
 
 EWEHUB.Theme = {
 	Background   = Color3.fromRGB(14, 14, 14),
@@ -109,6 +128,35 @@ local function IsMobile()
 	return UserInputService.TouchEnabled and not UserInputService.MouseEnabled
 end
 
+--============================================================
+-- Cari parent GUI teraman & paling atas yang tersedia di executor.
+-- Ini penyebab paling umum kenapa UI "tidak bisa dipencet": kalau
+-- ScreenGui cuma diparent ke PlayerGui biasa, library lain (mis.
+-- Rayfield) yang diparent ke gethui()/CoreGui akan selalu berada
+-- SATU LAYER LEBIH ATAS dan mencuri semua input, walaupun secara
+-- visual/DisplayOrder kita sudah lebih tinggi.
+--============================================================
+local function GetGuiParent()
+	if typeof(gethui) == "function" then
+		local ok, hui = pcall(gethui)
+		if ok and hui then return hui end
+	end
+	local ok2, coreGui = pcall(function() return game:GetService("CoreGui") end)
+	if ok2 and coreGui then
+		-- pastikan kita benar-benar boleh nulis ke CoreGui (beberapa executor melarang)
+		local ok3 = pcall(function()
+			local test = Instance.new("Folder")
+			test.Name = "__EWEHUB_test"
+			test.Parent = coreGui
+			test:Destroy()
+		end)
+		if ok3 then return coreGui end
+	end
+	return PlayerGui
+end
+
+local GuiParent = GetGuiParent()
+
 -- Membuat ScreenGui baru yang selalu diposisikan di layer paling atas
 local function NewTopScreenGui(name)
 	return New("ScreenGui", {
@@ -117,7 +165,7 @@ local function NewTopScreenGui(name)
 		IgnoreGuiInset = true,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		DisplayOrder = EWEHUB.DisplayOrder,
-		Parent = PlayerGui,
+		Parent = GuiParent,
 	})
 end
 
@@ -597,8 +645,13 @@ function EWEHUB:CreateWindow(config)
 	local discordCfg  = config.Discord -- { Enabled, Invite, Interval }
 
 	local guiName = "EWEHUB_" .. windowName
-	local existing = PlayerGui:FindFirstChild(guiName)
-	if existing then existing:Destroy() end
+	-- Hapus semua sisa ScreenGui lama dgn nama sama, di PlayerGui MAUPUN
+	-- di GuiParent (CoreGui/gethui) — mencegah "kotak hitam" nyangkut
+	-- kalau script sempat dijalankan ulang di sesi yang sama.
+	for _, root in ipairs({ PlayerGui, GuiParent }) do
+		local existing = root:FindFirstChild(guiName)
+		if existing then existing:Destroy() end
+	end
 
 	local ScreenGui = NewTopScreenGui(guiName)
 
@@ -743,14 +796,21 @@ function EWEHUB:CreateWindow(config)
 
 	-- Sidebar tab tetap di kiri (sudah horizontal terhadap konten),
 	-- tapi dibuat ramping karena tinggi window sekarang lebih pendek.
+	-- CATATAN FIX: ClipsDescendants pada `Main` cuma meng-clip ke bounding
+	-- box PERSEGI, bukan ke bentuk melengkung UICorner. Makanya TabList &
+	-- ContentArea (background polos, persegi) dulu bikin sudut bawah
+	-- window kelihatan "kotak" lagi walau Main sudah rounded. Solusinya:
+	-- kasih UICorner senilai radius Main ke keduanya juga — sudut atas
+	-- toh ketutup TopBar, sudut bawah jadi ikut melengkung dengan benar.
 	local TabListWidth = IsMobile() and 84 or 118
 	local TabList = New("Frame", {
 		Size = UDim2.new(0, TabListWidth, 1, -42),
 		Position = UDim2.new(0, 0, 0, 42),
 		BackgroundColor3 = Theme.Panel,
 		BorderSizePixel = 0,
+		ClipsDescendants = true,
 		Parent = Main,
-	})
+	}, { Corner(16) })
 	New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = TabList })
 	Padding(10).Parent = TabList
 
@@ -761,7 +821,7 @@ function EWEHUB:CreateWindow(config)
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
 		Parent = Main,
-	})
+	}, { Corner(16) })
 
 	local Window = setmetatable({}, { __index = EWEHUB })
 	Window.Tabs = {}
@@ -769,6 +829,22 @@ function EWEHUB:CreateWindow(config)
 	Window.ScreenGui = ScreenGui
 	Window.Main = Main
 	Window.Discord = nil
+
+	-- Daftar SEMUA halaman (tab buatan user + tab "Pengaturan" bawaan)
+	-- supaya switching-nya konsisten & saling ekslusif satu sama lain.
+	local AllPages = {}
+	local function SwitchTo(entry)
+		for _, t in ipairs(AllPages) do
+			if t.Page ~= entry.Page then
+				Tween(t.Button, FastTween, { BackgroundColor3 = Theme.PanelLight, TextColor3 = Theme.SubText })
+				t.Page.Visible = false
+			end
+		end
+		entry.Page.Position = UDim2.new(0, 6, 0, 10)
+		entry.Page.Visible = true
+		Tween(entry.Button, FastTween, { BackgroundColor3 = Theme.AccentDark, TextColor3 = Theme.Text })
+		Tween(entry.Page, SoftTween, { Position = UDim2.new(0, 10, 0, 10) })
+	end
 
 	function Window:Destroy()
 		if Window.Discord then Window.Discord.Disable() end
@@ -828,26 +904,11 @@ function EWEHUB:CreateWindow(config)
 		New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = Page })
 
 		local Tab = { Button = TabButton, Page = Page }
+		table.insert(AllPages, Tab)
 
 		-- Transisi tab: fade + sedikit slide, lebih halus daripada sekadar Visible toggle
 		local function SelectTab()
-			for _, t in pairs(Window.Tabs) do
-				if t.Page.Visible and t.Page ~= Page then
-					local oldPage = t.Page
-					Tween(t.Button, FastTween, { BackgroundColor3 = Theme.PanelLight, TextColor3 = Theme.SubText })
-					task.spawn(function()
-						oldPage.Position = oldPage.Position
-						oldPage.Visible = false
-					end)
-				else
-					Tween(t.Button, FastTween, { BackgroundColor3 = Theme.PanelLight, TextColor3 = Theme.SubText })
-				end
-			end
-
-			Page.Position = UDim2.new(0, 6, 0, 10)
-			Page.Visible = true
-			Tween(TabButton, FastTween, { BackgroundColor3 = Theme.AccentDark, TextColor3 = Theme.Text })
-			Tween(Page, SoftTween, { Position = UDim2.new(0, 10, 0, 10) })
+			SwitchTo(Tab)
 		end
 
 		TabButton.MouseButton1Click:Connect(SelectTab)
@@ -1116,6 +1177,172 @@ function EWEHUB:CreateWindow(config)
 
 		Window.Tabs[tabName] = Tab
 		return Tab
+	end
+
+	--------------------------------------------------------------
+	-- TAB BAWAAN "⚙ Pengaturan" — SELALU ada, SELALU di paling ujung
+	-- (bawah) daftar tab, dan TIDAK diekspos lewat API publik manapun
+	-- sehingga tidak bisa dihapus/diubah oleh script yang memakai
+	-- library ini. Isinya: profil pemain, HWID, & info library.
+	--------------------------------------------------------------
+	do
+		local SettingsButton = New("TextButton", {
+			Text = "⚙  Pengaturan",
+			Font = Enum.Font.GothamMedium,
+			TextSize = 13,
+			TextColor3 = Theme.SubText,
+			BackgroundColor3 = Theme.PanelLight,
+			Size = UDim2.new(1, 0, 0, 32),
+			AutoButtonColor = false,
+			LayoutOrder = 9999, -- dijamin selalu paling bawah/ujung di TabList
+			Parent = TabList,
+		}, { Corner(8) })
+
+		local SettingsPage = New("ScrollingFrame", {
+			Name = "Settings_Page",
+			Size = UDim2.new(1, -20, 1, -20),
+			Position = UDim2.new(0, 10, 0, 10),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 3,
+			ScrollBarImageColor3 = Theme.Accent,
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			Visible = false,
+			Parent = ContentArea,
+		})
+		New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = SettingsPage })
+
+		SettingsButton.MouseEnter:Connect(function()
+			if not SettingsPage.Visible then Tween(SettingsButton, FastTween, { BackgroundColor3 = Theme.Stroke }) end
+		end)
+		SettingsButton.MouseLeave:Connect(function()
+			if not SettingsPage.Visible then Tween(SettingsButton, FastTween, { BackgroundColor3 = Theme.PanelLight }) end
+		end)
+
+		local SettingsEntry = { Button = SettingsButton, Page = SettingsPage }
+		table.insert(AllPages, SettingsEntry)
+		SettingsButton.MouseButton1Click:Connect(function() SwitchTo(SettingsEntry) end)
+
+		-- Kartu profil: headshot + nama + UserId
+		local ProfileCard = New("Frame", {
+			Size = UDim2.new(1, 0, 0, 70),
+			BackgroundColor3 = Theme.Panel,
+			Parent = SettingsPage,
+		}, { Corner(12), Stroke() })
+
+		local Headshot = New("ImageLabel", {
+			Size = UDim2.new(0, 54, 0, 54),
+			Position = UDim2.new(0, 8, 0.5, -27),
+			BackgroundColor3 = Theme.PanelLight,
+			ScaleType = Enum.ScaleType.Crop,
+			Image = "",
+			Parent = ProfileCard,
+		}, { Corner(27), Stroke(Theme.Accent, 1) })
+
+		task.spawn(function()
+			local ok, content = pcall(function()
+				return Players:GetUserThumbnailAsync(
+					LocalPlayer.UserId,
+					Enum.ThumbnailType.HeadShot,
+					Enum.ThumbnailSize.Size100x100
+				)
+			end)
+			if ok and content then
+				Headshot.Image = content
+			end
+		end)
+
+		local displayName = LocalPlayer.DisplayName
+		local nameText = (displayName ~= "" and displayName ~= LocalPlayer.Name)
+			and (displayName .. "  (@" .. LocalPlayer.Name .. ")")
+			or LocalPlayer.Name
+
+		New("TextLabel", {
+			Text = nameText,
+			Font = Enum.Font.GothamBold,
+			TextSize = 15,
+			TextColor3 = Theme.Text,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			BackgroundTransparency = 1,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Position = UDim2.new(0, 72, 0, 14),
+			Size = UDim2.new(1, -84, 0, 20),
+			Parent = ProfileCard,
+		})
+
+		New("TextLabel", {
+			Text = "User ID: " .. tostring(LocalPlayer.UserId),
+			Font = Enum.Font.Gotham,
+			TextSize = 12,
+			TextColor3 = Theme.SubText,
+			BackgroundTransparency = 1,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Position = UDim2.new(0, 72, 0, 36),
+			Size = UDim2.new(1, -84, 0, 16),
+			Parent = ProfileCard,
+		})
+
+		-- HWID — dicoba dari beberapa nama fungsi umum yang disediakan executor
+		local hwid = "Tidak tersedia"
+		local hwidFnNames = { "gethwid", "get_hwid", "getHWID", "get_hardware_id" }
+		local env = (typeof(getgenv) == "function") and getgenv() or _G
+		for _, fnName in ipairs(hwidFnNames) do
+			local fn = env[fnName]
+			if typeof(fn) == "function" then
+				local ok, result = pcall(fn)
+				if ok and result and tostring(result) ~= "" then
+					hwid = tostring(result)
+					break
+				end
+			end
+		end
+
+		-- Nama executor (kalau tersedia)
+		local executorName = "Tidak diketahui"
+		if typeof(identifyexecutor) == "function" then
+			local ok, name = pcall(identifyexecutor)
+			if ok and name then executorName = tostring(name) end
+		end
+
+		local function InfoRow(label, value)
+			local Row = New("Frame", {
+				Size = UDim2.new(1, 0, 0, 30),
+				BackgroundColor3 = Theme.Panel,
+				Parent = SettingsPage,
+			}, { Corner(8), Stroke() })
+
+			New("TextLabel", {
+				Text = label,
+				Font = Enum.Font.GothamMedium,
+				TextSize = 12,
+				TextColor3 = Theme.SubText,
+				BackgroundTransparency = 1,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				Position = UDim2.new(0, 10, 0, 0),
+				Size = UDim2.new(0.4, 0, 1, 0),
+				Parent = Row,
+			})
+
+			New("TextLabel", {
+				Text = value,
+				Font = Enum.Font.Gotham,
+				TextSize = 12,
+				TextColor3 = Theme.Text,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				BackgroundTransparency = 1,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				Position = UDim2.new(0.4, 0, 0, 0),
+				Size = UDim2.new(0.6, -10, 1, 0),
+				Parent = Row,
+			})
+
+			return Row
+		end
+
+		InfoRow("HWID", hwid)
+		InfoRow("Executor", executorName)
+		InfoRow("Library", "EWEHUB v" .. EWEHUB.Version .. " by " .. EWEHUB.Author)
 	end
 
 	self.Windows[windowName] = Window
