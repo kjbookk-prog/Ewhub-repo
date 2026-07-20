@@ -3,7 +3,7 @@
 	 EWEHUB
 	 UI Library untuk Roblox — dibuat murni dengan Luau.
 	 Dibuat oleh: Asep
-	 Versi: 4.1.0
+	 Versi: 4.1.5
 
 	 CATATAN PERUBAHAN v4.0.0:
 	 1. Layout utama sekarang HORIZONTAL (lebih lebar, lebih pendek)
@@ -17,7 +17,7 @@
 	    dimatikan lewat config).
 	 6. Transisi tab & buka/tutup window lebih halus (custom easing).
 
-	 CATATAN PERUBAHAN v4.1.0 (perbaikan dari laporan bug):
+	 CATATAN PERUBAHAN v4.1.0 - v4.1.5 (perbaikan dari laporan bug):
 	 1. FIX: UI tidak bisa dipencet ketika bentrok dengan library lain
 	    (mis. Rayfield). ScreenGui sekarang diparent ke gethui()/CoreGui
 	    (kalau tersedia di executor) dan DisplayOrder dinaikkan ke nilai
