@@ -51,7 +51,7 @@
 	    info versi library.
 
 	 CARA MEMUAT (jika dihosting, mis. di GitHub raw):
-	   local EWEHUB = loadstring(game:HttpGet("https://raw.githubusercontent.com/kjbookk-prog/Ewhub-repo/refs/heads/main/Library-1.lua"))()
+	   local EWEHUB = loadstring(game:HttpGet("URL_RAW_KAMU"))()
 
 	 CARA MEMUAT (sebagai ModuleScript di dalam game):
 	   local EWEHUB = require(path.to.Library)
@@ -62,6 +62,7 @@ local TweenService     = game:GetService("TweenService")
 local Players          = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local HttpService      = game:GetService("HttpService")
+local RunService       = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
@@ -117,6 +118,44 @@ local function New(class, props, children)
 	for k, v in pairs(props or {}) do inst[k] = v end
 	for _, child in ipairs(children or {}) do child.Parent = inst end
 	return inst
+end
+
+-- Menjalankan Callback user dengan aman (pcall). Kalau error, elemen lain
+-- TETAP jalan normal — user cuma dikasih toast error, bukan seluruh UI
+-- ikut diam-diam gagal seperti kasus bug GroupTransparency dulu.
+local function SafeCall(fn, ...)
+	if typeof(fn) ~= "function" then return end
+	local args = table.pack(...)
+	local ok, err = pcall(function()
+		fn(table.unpack(args, 1, args.n))
+	end)
+	if not ok then
+		warn("[EWEHUB] Callback error: " .. tostring(err))
+		pcall(function()
+			EWEHUB:Notify({
+				Title = "Error",
+				Content = "Ada elemen yang error: " .. tostring(err),
+				Duration = 5,
+			})
+		end)
+	end
+end
+
+-- Coba sembunyikan ScreenGui dari deteksi luar kalau executor mendukung
+-- (protectgui/protect_gui/syn.protect_gui). Aman kalau tidak didukung —
+-- cuma di-skip diam-diam, tidak error.
+local function TryProtectGui(gui)
+	local env = (typeof(getgenv) == "function") and getgenv() or _G
+	for _, fnName in ipairs({ "protectgui", "protect_gui" }) do
+		local fn = env[fnName]
+		if typeof(fn) == "function" then
+			pcall(fn, gui)
+			return
+		end
+	end
+	if typeof(syn) == "table" and typeof(syn.protect_gui) == "function" then
+		pcall(syn.protect_gui, gui)
+	end
 end
 
 local function Corner(radius)
@@ -177,7 +216,7 @@ local GuiParent = GetGuiParent()
 -- parentOverride opsional — dipakai kalau ada window yang mau memaksa
 -- parent tertentu (mis. ForcePlayerGui = true di config CreateWindow).
 local function NewTopScreenGui(name, parentOverride)
-	return New("ScreenGui", {
+	local gui = New("ScreenGui", {
 		Name = name,
 		ResetOnSpawn = false,
 		IgnoreGuiInset = true,
@@ -185,6 +224,8 @@ local function NewTopScreenGui(name, parentOverride)
 		DisplayOrder = EWEHUB.DisplayOrder,
 		Parent = parentOverride or GuiParent,
 	})
+	TryProtectGui(gui)
+	return gui
 end
 
 --============================================================
@@ -653,6 +694,76 @@ local function SetupDiscordNotification(EWEHUBRef, screenGui, Theme, discordConf
 end
 
 --============================================================
+-- WATERMARK — pill kecil yang tetap kelihatan walau Main di-minimize,
+-- nunjukin nama hub, FPS, dan ping. Draggable, ScreenGui terpisah
+-- (jadi independen dari state minimize window utama).
+--============================================================
+local function SetupWatermark(windowName, Theme)
+	local WMGui = NewTopScreenGui("EWEHUB_Watermark_" .. windowName)
+
+	local WM = New("Frame", {
+		Size = UDim2.new(0, 190, 0, 26),
+		Position = UDim2.new(0, 10, 0, 10),
+		BackgroundColor3 = Theme.Panel,
+		Parent = WMGui,
+	}, { Corner(8), Stroke() })
+
+	New("Frame", {
+		Size = UDim2.new(0, 6, 0, 6),
+		Position = UDim2.new(0, 8, 0.5, -3),
+		BackgroundColor3 = Theme.Accent,
+		Parent = WM,
+	}, { Corner(3) })
+
+	local Label = New("TextLabel", {
+		Text = windowName .. " | FPS: -- | Ping: --ms",
+		Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = Theme.Text,
+		BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+		Position = UDim2.new(0, 20, 0, 0), Size = UDim2.new(1, -26, 1, 0),
+		Parent = WM,
+	})
+
+	MakeDraggable(WM, WM)
+
+	local statsService
+	pcall(function() statsService = game:GetService("Stats") end)
+
+	local running = true
+	task.spawn(function()
+		local frameCount = 0
+		local heartbeatConn = RunService.Heartbeat:Connect(function()
+			frameCount = frameCount + 1
+		end)
+
+		while running and WM.Parent do
+			task.wait(1)
+			local fps = frameCount
+			frameCount = 0
+
+			local ping = "--"
+			if statsService then
+				local ok, val = pcall(function()
+					return statsService.Network.ServerStatsItem["Data Ping"]:GetValue()
+				end)
+				if ok and val then ping = tostring(math.floor(val)) end
+			end
+
+			Label.Text = windowName .. " | FPS: " .. fps .. " | Ping: " .. ping .. "ms"
+		end
+
+		heartbeatConn:Disconnect()
+	end)
+
+	return {
+		Destroy = function()
+			running = false
+			WMGui:Destroy()
+		end,
+		SetVisible = function(v) WMGui.Enabled = v end,
+	}
+end
+
+--============================================================
 -- CREATE WINDOW
 --============================================================
 function EWEHUB:CreateWindow(config)
@@ -661,6 +772,15 @@ function EWEHUB:CreateWindow(config)
 	local toggleKey   = config.ToggleKey or Enum.KeyCode.RightControl
 	local Theme       = self.Theme
 	local discordCfg  = config.Discord -- { Enabled, Invite, Interval }
+
+	-- Watermark AKTIF secara default. Matikan dgn Watermark = false,
+	-- atau Watermark = { Enabled = false }.
+	local watermarkEnabled = true
+	if config.Watermark == false then
+		watermarkEnabled = false
+	elseif type(config.Watermark) == "table" and config.Watermark.Enabled == false then
+		watermarkEnabled = false
+	end
 
 	local guiName = "EWEHUB_" .. windowName
 	-- Hapus semua sisa ScreenGui lama dgn nama sama, di PlayerGui MAUPUN
@@ -841,12 +961,60 @@ function EWEHUB:CreateWindow(config)
 		Parent = Main,
 	}, { Corner(16) })
 
+	-- Search bar: nempel di atas ContentArea, dipakai buat filter elemen
+	-- di tab yang lagi aktif (semua Page digeser turun 34px buat kasih ruang).
+	local SearchBoxHolder = New("Frame", {
+		Size = UDim2.new(1, -20, 0, 26),
+		Position = UDim2.new(0, 10, 0, 6),
+		BackgroundColor3 = Theme.Panel,
+		Parent = ContentArea,
+	}, { Corner(8), Stroke() })
+
+	New("TextLabel", {
+		Text = "🔍",
+		Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = Theme.SubText,
+		BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Center,
+		Position = UDim2.new(0, 4, 0, 0), Size = UDim2.new(0, 20, 1, 0),
+		Parent = SearchBoxHolder,
+	})
+
+	local SearchBox = New("TextBox", {
+		Text = "", PlaceholderText = "Cari elemen...",
+		Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = Theme.Text, PlaceholderColor3 = Theme.SubText,
+		BackgroundTransparency = 1, ClearTextOnFocus = false,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Position = UDim2.new(0, 26, 0, 0), Size = UDim2.new(1, -34, 1, 0),
+		Parent = SearchBoxHolder,
+	})
+
+	-- Filter elemen langsung di dalam sebuah Page berdasar teks query.
+	local function ApplySearchFilter(page, query)
+		query = (query or ""):lower()
+		for _, child in ipairs(page:GetChildren()) do
+			if child:IsA("GuiObject") then
+				if query == "" then
+					child.Visible = true
+				else
+					local text = ""
+					if child:IsA("TextLabel") or child:IsA("TextButton") then
+						text = child.Text
+					else
+						local lbl = child:FindFirstChildWhichIsA("TextLabel") or child:FindFirstChildWhichIsA("TextButton")
+						if lbl then text = lbl.Text end
+					end
+					child.Visible = text:lower():find(query, 1, true) ~= nil
+				end
+			end
+		end
+	end
+
 	local Window = setmetatable({}, { __index = EWEHUB })
 	Window.Tabs = {}
 	Window._firstTab = nil
 	Window.ScreenGui = ScreenGui
 	Window.Main = Main
 	Window.Discord = nil
+	Window.Watermark = nil
 
 	-- Daftar SEMUA halaman (tab buatan user + tab "Pengaturan" bawaan)
 	-- supaya switching-nya konsisten & saling ekslusif satu sama lain.
@@ -858,14 +1026,24 @@ function EWEHUB:CreateWindow(config)
 				t.Page.Visible = false
 			end
 		end
-		entry.Page.Position = UDim2.new(0, 6, 0, 10)
+		entry.Page.Position = UDim2.new(0, 6, 0, 44)
 		entry.Page.Visible = true
 		Tween(entry.Button, FastTween, { BackgroundColor3 = Theme.AccentDark, TextColor3 = Theme.Text })
-		Tween(entry.Page, SoftTween, { Position = UDim2.new(0, 10, 0, 10) })
+		Tween(entry.Page, SoftTween, { Position = UDim2.new(0, 10, 0, 44) })
+		ApplySearchFilter(entry.Page, SearchBox.Text)
 	end
+
+	SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+		for _, entry in ipairs(AllPages) do
+			if entry.Page.Visible then
+				ApplySearchFilter(entry.Page, SearchBox.Text)
+			end
+		end
+	end)
 
 	function Window:Destroy()
 		if Window.Discord then Window.Discord.Disable() end
+		if Window.Watermark then Window.Watermark.Destroy() end
 		ScreenGui:Destroy()
 		EWEHUB.Windows[windowName] = nil
 	end
@@ -907,8 +1085,8 @@ function EWEHUB:CreateWindow(config)
 
 		local Page = New("ScrollingFrame", {
 			Name = tabName .. "_Page",
-			Size = UDim2.new(1, -20, 1, -20),
-			Position = UDim2.new(0, 10, 0, 10),
+			Size = UDim2.new(1, -20, 1, -54),
+			Position = UDim2.new(0, 10, 0, 44),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			ScrollBarThickness = 3,
@@ -961,7 +1139,7 @@ function EWEHUB:CreateWindow(config)
 			Btn.MouseButton1Click:Connect(function()
 				Tween(Btn, TweenInfo.new(0.08), { BackgroundColor3 = Theme.Accent })
 				task.delay(0.1, function() Tween(Btn, FastTween, { BackgroundColor3 = Theme.Panel }) end)
-				if opt.Callback then task.spawn(opt.Callback) end
+				if opt.Callback then task.spawn(SafeCall, opt.Callback) end
 			end)
 			return Btn
 		end
@@ -996,7 +1174,7 @@ function EWEHUB:CreateWindow(config)
 				Tween(Switch, FastTween, { BackgroundColor3 = state and Theme.Accent or Theme.Stroke })
 				Tween(Knob, FastTween, { Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8) })
 				if flagName then EWEHUB.Flags[flagName] = state end
-				if opt.Callback and not silent then task.spawn(opt.Callback, state) end
+				if opt.Callback and not silent then task.spawn(SafeCall, opt.Callback, state) end
 			end
 
 			ClickArea.MouseButton1Click:Connect(function() SetState(not state) end)
@@ -1012,7 +1190,9 @@ function EWEHUB:CreateWindow(config)
 		function Tab:CreateSlider(opt)
 			opt = opt or {}
 			local min, max = opt.Min or 0, opt.Max or 100
+			local roundValue = opt.Round ~= false -- default true: hasil selalu bilangan bulat (1, 2, 3, dst)
 			local value = opt.Default or min
+			if roundValue then value = math.floor(value + 0.5) end
 			local flagName = opt.Flag or opt.Name
 
 			local Holder = New("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundColor3 = Theme.Panel, Parent = Page }, { Corner(10), Stroke() })
@@ -1037,13 +1217,13 @@ function EWEHUB:CreateWindow(config)
 			local dragging = false
 			local function SetValue(newValue, silent)
 				newValue = math.clamp(newValue, min, max)
-				if opt.Round ~= false then newValue = math.floor(newValue + 0.5) end
+				if roundValue then newValue = math.floor(newValue + 0.5) end
 				value = newValue
 				local pct = (value - min) / (max - min)
 				Tween(Fill, FastTween, { Size = UDim2.new(pct, 0, 1, 0) })
 				ValueLabel.Text = tostring(value)
 				if flagName then EWEHUB.Flags[flagName] = value end
-				if opt.Callback and not silent then task.spawn(opt.Callback, value) end
+				if opt.Callback and not silent then task.spawn(SafeCall, opt.Callback, value) end
 			end
 
 			local function UpdateFromInput(input)
@@ -1079,9 +1259,23 @@ function EWEHUB:CreateWindow(config)
 		function Tab:CreateDropdown(opt)
 			opt = opt or {}
 			local options = opt.Options or {}
-			local selected = opt.Default
+			local isMulti = opt.Multi == true
 			local flagName = opt.Flag or opt.Name
 			local open = false
+
+			-- Untuk single-select: selected = string | nil
+			-- Untuk multi-select:  selected = { [optionName] = true, ... } (set)
+			local selected
+			if isMulti then
+				selected = {}
+				if type(opt.Default) == "table" then
+					for _, v in ipairs(opt.Default) do selected[v] = true end
+				elseif type(opt.Default) == "string" then
+					selected[opt.Default] = true
+				end
+			else
+				selected = opt.Default
+			end
 
 			local Holder = New("Frame", {
 				Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel,
@@ -1097,9 +1291,10 @@ function EWEHUB:CreateWindow(config)
 			})
 
 			local SelectedLabel = New("TextLabel", {
-				Text = selected or "Select...", Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Theme.SubText,
+				Text = "Select...", Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Theme.SubText,
 				TextXAlignment = Enum.TextXAlignment.Right, BackgroundTransparency = 1,
-				Position = UDim2.new(0.4, 0, 0, 0), Size = UDim2.new(0.5, -30, 0, 36), ZIndex = 5, Parent = MainRow,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Position = UDim2.new(0.35, 0, 0, 0), Size = UDim2.new(0.55, -30, 0, 36), ZIndex = 5, Parent = MainRow,
 			})
 
 			local Arrow = New("TextLabel", {
@@ -1114,31 +1309,75 @@ function EWEHUB:CreateWindow(config)
 			})
 			local ListLayout = New("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = ListFrame })
 
+			local api = {}
+
+			-- Update teks label kanan ("Select...", "Opsi A", atau "3 dipilih")
+			local function RefreshSelectedLabel()
+				if isMulti then
+					local names, count = {}, 0
+					for name in pairs(selected) do
+						count = count + 1
+						if #names < 2 then table.insert(names, name) end
+					end
+					if count == 0 then
+						SelectedLabel.Text = "Select..."
+					elseif count <= 2 then
+						SelectedLabel.Text = table.concat(names, ", ")
+					else
+						SelectedLabel.Text = count .. " dipilih"
+					end
+				else
+					SelectedLabel.Text = selected or "Select..."
+				end
+			end
+
 			local optionButtons = {}
 			local function RefreshOptions()
 				for _, b in ipairs(optionButtons) do b:Destroy() end
 				optionButtons = {}
 				for _, optionName in ipairs(options) do
+					local isChecked = isMulti and selected[optionName] == true
 					local OptBtn = New("TextButton", {
-						Text = optionName, Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Theme.Text,
+						Text = (isMulti and (isChecked and "☑  " or "☐  ") or "") .. optionName,
+						Font = Enum.Font.Gotham, TextSize = 13,
+						TextColor3 = (not isMulti and selected == optionName) and Theme.Accent or Theme.Text,
+						TextXAlignment = Enum.TextXAlignment.Left,
 						BackgroundColor3 = Theme.PanelLight, Size = UDim2.new(1, 0, 0, 28),
 						AutoButtonColor = false, ZIndex = 5, Parent = ListFrame,
-					})
+					}, { Padding(0, 0, 0, 10) })
 					OptBtn.MouseEnter:Connect(function() Tween(OptBtn, FastTween, { BackgroundColor3 = Theme.AccentDark }) end)
 					OptBtn.MouseLeave:Connect(function() Tween(OptBtn, FastTween, { BackgroundColor3 = Theme.PanelLight }) end)
+
 					OptBtn.MouseButton1Click:Connect(function()
-						selected = optionName
-						SelectedLabel.Text = optionName
-						if flagName then EWEHUB.Flags[flagName] = selected end
-						if opt.Callback then task.spawn(opt.Callback, selected) end
-						open = false
-						Tween(Holder, FastTween, { Size = UDim2.new(1, 0, 0, 36) })
-						Tween(Arrow, FastTween, { Rotation = 0 })
+						if isMulti then
+							selected[optionName] = not selected[optionName] or nil
+							RefreshSelectedLabel()
+							RefreshOptions() -- redraw centang, dropdown TETAP terbuka
+							if flagName then
+								local arr = {}
+								for name in pairs(selected) do table.insert(arr, name) end
+								EWEHUB.Flags[flagName] = arr
+							end
+							if opt.Callback then
+								local arr = {}
+								for name in pairs(selected) do table.insert(arr, name) end
+								task.spawn(SafeCall, opt.Callback, arr)
+							end
+						else
+							selected = optionName
+							RefreshSelectedLabel()
+							if flagName then EWEHUB.Flags[flagName] = selected end
+							if opt.Callback then task.spawn(SafeCall, opt.Callback, selected) end
+							open = false
+							Tween(Holder, FastTween, { Size = UDim2.new(1, 0, 0, 36) })
+							Tween(Arrow, FastTween, { Rotation = 0 })
+						end
 					end)
 					table.insert(optionButtons, OptBtn)
 				end
 			end
 			RefreshOptions()
+			RefreshSelectedLabel()
 
 			MainRow.MouseButton1Click:Connect(function()
 				open = not open
@@ -1147,18 +1386,52 @@ function EWEHUB:CreateWindow(config)
 				Tween(Arrow, FastTween, { Rotation = open and 180 or 0 })
 			end)
 
-			local api = {}
 			function api.SetOptions(newOptions) options = newOptions RefreshOptions() end
+
 			function api.Set(value, silent)
-				selected = value
-				SelectedLabel.Text = value or "Select..."
-				if flagName then EWEHUB.Flags[flagName] = selected end
-				if opt.Callback and not silent then task.spawn(opt.Callback, selected) end
+				if isMulti then
+					selected = {}
+					if type(value) == "table" then
+						for _, v in ipairs(value) do selected[v] = true end
+					elseif type(value) == "string" then
+						selected[value] = true
+					end
+					RefreshOptions()
+				else
+					selected = value
+				end
+				RefreshSelectedLabel()
+				if flagName then
+					if isMulti then
+						local arr = {}
+						for name in pairs(selected) do table.insert(arr, name) end
+						EWEHUB.Flags[flagName] = arr
+					else
+						EWEHUB.Flags[flagName] = selected
+					end
+				end
+				if opt.Callback and not silent then
+					if isMulti then
+						local arr = {}
+						for name in pairs(selected) do table.insert(arr, name) end
+						task.spawn(SafeCall, opt.Callback, arr)
+					else
+						task.spawn(SafeCall, opt.Callback, selected)
+					end
+				end
 			end
-			function api.Get() return selected end
+
+			function api.Get()
+				if isMulti then
+					local arr = {}
+					for name in pairs(selected) do table.insert(arr, name) end
+					return arr
+				end
+				return selected
+			end
 
 			if flagName then
-				EWEHUB.Flags[flagName] = selected
+				EWEHUB.Flags[flagName] = api.Get()
 				EWEHUB.ConfigCallbacks[flagName] = function(v) api.Set(v, true) end
 			end
 
@@ -1181,7 +1454,7 @@ function EWEHUB:CreateWindow(config)
 			Box.FocusLost:Connect(function(enterPressed)
 				Tween(Holder, FastTween, { BackgroundColor3 = Theme.Panel })
 				if flagName then EWEHUB.Flags[flagName] = Box.Text end
-				if opt.Callback then task.spawn(opt.Callback, Box.Text, enterPressed) end
+				if opt.Callback then task.spawn(SafeCall, opt.Callback, Box.Text, enterPressed) end
 			end)
 
 			if flagName then
@@ -1190,6 +1463,192 @@ function EWEHUB:CreateWindow(config)
 			end
 
 			return { Set = function(v) Box.Text = v end, Get = function() return Box.Text end, Instance = Box }
+		end
+
+		function Tab:CreateColorPicker(opt)
+			opt = opt or {}
+			local flagName = opt.Flag or opt.Name
+			local color = opt.Default or Color3.fromRGB(255, 255, 255)
+			local open = false
+
+			local Holder = New("Frame", {
+				Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel,
+				ClipsDescendants = true, Parent = Page,
+			}, { Corner(10), Stroke() })
+
+			New("TextLabel", {
+				Text = opt.Name or "Warna", Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = Theme.Text,
+				TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
+				Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -60, 0, 36), Parent = Holder,
+			})
+
+			local SwatchBtn = New("TextButton", {
+				Text = "", BackgroundColor3 = color, AutoButtonColor = false,
+				Size = UDim2.new(0, 28, 0, 20), Position = UDim2.new(1, -40, 0, 8), Parent = Holder,
+			}, { Corner(6), Stroke() })
+
+			local Panel = New("Frame", {
+				Position = UDim2.new(0, 10, 0, 40), Size = UDim2.new(1, -20, 0, 90),
+				BackgroundTransparency = 1, Parent = Holder,
+			})
+			New("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = Panel })
+
+			local r = math.floor(color.R * 255)
+			local g = math.floor(color.G * 255)
+			local b = math.floor(color.B * 255)
+
+			local function ApplyColor(fireCallback)
+				color = Color3.fromRGB(r, g, b)
+				SwatchBtn.BackgroundColor3 = color
+				if flagName then EWEHUB.Flags[flagName] = color end
+				if fireCallback and opt.Callback then task.spawn(SafeCall, opt.Callback, color) end
+			end
+
+			local function BuildChannel(label, initialValue, onDrag)
+				local Row = New("Frame", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Parent = Panel })
+				New("TextLabel", {
+					Text = label, Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Theme.SubText,
+					BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+					Size = UDim2.new(0, 14, 1, 0), Parent = Row,
+				})
+				local Track = New("Frame", {
+					Size = UDim2.new(1, -56, 0, 6), Position = UDim2.new(0, 18, 0.5, -3),
+					BackgroundColor3 = Theme.Stroke, Parent = Row,
+				}, { Corner(3) })
+				local Fill = New("Frame", {
+					Size = UDim2.new(initialValue / 255, 0, 1, 0), BackgroundColor3 = Theme.Accent, Parent = Track,
+				}, { Corner(3) })
+				local ValueLabel = New("TextLabel", {
+					Text = tostring(initialValue), Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Theme.Text,
+					BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Right,
+					Position = UDim2.new(1, -32, 0, 0), Size = UDim2.new(0, 32, 1, 0), Parent = Row,
+				})
+
+				local function SetValue(v)
+					v = math.clamp(math.floor(v + 0.5), 0, 255)
+					Tween(Fill, FastTween, { Size = UDim2.new(v / 255, 0, 1, 0) })
+					ValueLabel.Text = tostring(v)
+					return v
+				end
+
+				local dragging = false
+				local function UpdateFromInput(input)
+					local relative = math.clamp((input.Position.X - Track.AbsolutePosition.X) / Track.AbsoluteSize.X, 0, 1)
+					local v = SetValue(relative * 255)
+					onDrag(v)
+					ApplyColor(true)
+				end
+
+				Track.InputBegan:Connect(function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+						dragging = true
+						UpdateFromInput(input)
+					end
+				end)
+				UserInputService.InputChanged:Connect(function(input)
+					if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+						UpdateFromInput(input)
+					end
+				end)
+				UserInputService.InputEnded:Connect(function(input)
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+						dragging = false
+					end
+				end)
+
+				return SetValue
+			end
+
+			local SetR = BuildChannel("R", r, function(v) r = v end)
+			local SetG = BuildChannel("G", g, function(v) g = v end)
+			local SetB = BuildChannel("B", b, function(v) b = v end)
+
+			SwatchBtn.MouseButton1Click:Connect(function()
+				open = not open
+				Tween(Holder, MediumTween, { Size = UDim2.new(1, 0, 0, open and 134 or 36) })
+			end)
+
+			local api = {}
+			function api.Set(newColor, silent)
+				color = newColor
+				r = math.floor(color.R * 255)
+				g = math.floor(color.G * 255)
+				b = math.floor(color.B * 255)
+				SetR(r)
+				SetG(g)
+				SetB(b)
+				SwatchBtn.BackgroundColor3 = color
+				if flagName then EWEHUB.Flags[flagName] = color end
+				if opt.Callback and not silent then task.spawn(SafeCall, opt.Callback, color) end
+			end
+			function api.Get() return color end
+
+			if flagName then
+				EWEHUB.Flags[flagName] = color
+				EWEHUB.ConfigCallbacks[flagName] = function(v) api.Set(v, true) end
+			end
+
+			return api
+		end
+
+		function Tab:CreateKeybind(opt)
+			opt = opt or {}
+			local flagName = opt.Flag or opt.Name
+			local currentKey = opt.Default -- Enum.KeyCode | nil
+			local listening = false
+
+			local Holder = New("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel, Parent = Page }, { Corner(10), Stroke() })
+			New("TextLabel", {
+				Text = opt.Name or "Keybind", Font = Enum.Font.GothamMedium, TextSize = 14, TextColor3 = Theme.Text,
+				TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
+				Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -100, 1, 0), Parent = Holder,
+			})
+
+			local KeyBtn = New("TextButton", {
+				Text = currentKey and currentKey.Name or "...",
+				Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = Theme.Accent,
+				BackgroundColor3 = Theme.PanelLight, AutoButtonColor = false,
+				Size = UDim2.new(0, 80, 0, 26), Position = UDim2.new(1, -90, 0.5, -13),
+				Parent = Holder,
+			}, { Corner(6), Stroke() })
+
+			KeyBtn.MouseButton1Click:Connect(function()
+				if listening then return end
+				listening = true
+				KeyBtn.Text = "..."
+				Tween(KeyBtn, FastTween, { BackgroundColor3 = Theme.AccentDark })
+			end)
+
+			UserInputService.InputBegan:Connect(function(input, processed)
+				if listening and input.UserInputType == Enum.UserInputType.Keyboard then
+					listening = false
+					currentKey = input.KeyCode
+					KeyBtn.Text = currentKey.Name
+					Tween(KeyBtn, FastTween, { BackgroundColor3 = Theme.PanelLight })
+					if flagName then EWEHUB.Flags[flagName] = currentKey end
+					if opt.Callback then task.spawn(SafeCall, opt.Callback, currentKey, false) end
+					return
+				end
+				if not processed and not listening and currentKey and input.KeyCode == currentKey then
+					if opt.Callback then task.spawn(SafeCall, opt.Callback, currentKey, true) end
+				end
+			end)
+
+			local api = {}
+			function api.Set(key, silent)
+				currentKey = key
+				KeyBtn.Text = key and key.Name or "..."
+				if flagName then EWEHUB.Flags[flagName] = currentKey end
+				if opt.Callback and not silent then task.spawn(SafeCall, opt.Callback, currentKey, false) end
+			end
+			function api.Get() return currentKey end
+
+			if flagName then
+				EWEHUB.Flags[flagName] = currentKey
+				EWEHUB.ConfigCallbacks[flagName] = function(v) api.Set(v, true) end
+			end
+
+			return api
 		end
 
 		Window.Tabs[tabName] = Tab
@@ -1217,8 +1676,8 @@ function EWEHUB:CreateWindow(config)
 
 		local SettingsPage = New("ScrollingFrame", {
 			Name = "Settings_Page",
-			Size = UDim2.new(1, -20, 1, -20),
-			Position = UDim2.new(0, 10, 0, 10),
+			Size = UDim2.new(1, -20, 1, -54),
+			Position = UDim2.new(0, 10, 0, 44),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 			ScrollBarThickness = 3,
@@ -1360,9 +1819,168 @@ function EWEHUB:CreateWindow(config)
 		InfoRow("HWID", hwid)
 		InfoRow("Executor", executorName)
 		InfoRow("Library", "EWEHUB v" .. EWEHUB.Version .. " by " .. EWEHUB.Author)
+
+		-- ===== Panel Konfigurasi (Save / Load / Delete) =====
+		New("TextLabel", {
+			Text = "Konfigurasi",
+			Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = Theme.SubText,
+			TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 0, 20), Parent = SettingsPage,
+		})
+
+		local ConfigNameHolder = New("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel, Parent = SettingsPage }, { Corner(10), Stroke() })
+		local ConfigNameInput = New("TextBox", {
+			Text = "", PlaceholderText = "Nama config baru...",
+			Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Theme.Text, PlaceholderColor3 = Theme.SubText,
+			BackgroundTransparency = 1, Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -24, 1, 0),
+			TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false, Parent = ConfigNameHolder,
+		})
+
+		-- Dropdown mini buat pilih config yang sudah tersimpan
+		local ConfigDropdownHolder = New("Frame", {
+			Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel,
+			ClipsDescendants = true, ZIndex = 5, Parent = SettingsPage,
+		}, { Corner(10), Stroke() })
+
+		local ConfigMainRow = New("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 36), ZIndex = 5, Parent = ConfigDropdownHolder })
+
+		New("TextLabel", {
+			Text = "Config Tersimpan", Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Theme.Text,
+			TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
+			Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(0.55, 0, 0, 36), ZIndex = 5, Parent = ConfigMainRow,
+		})
+
+		local ConfigSelectedLabel = New("TextLabel", {
+			Text = "Pilih...", Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = Theme.SubText,
+			TextXAlignment = Enum.TextXAlignment.Right, BackgroundTransparency = 1, TextTruncate = Enum.TextTruncate.AtEnd,
+			Position = UDim2.new(0.4, 0, 0, 0), Size = UDim2.new(0.5, -30, 0, 36), ZIndex = 5, Parent = ConfigMainRow,
+		})
+
+		local ConfigArrow = New("TextLabel", {
+			Text = "▾", Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Theme.Accent,
+			BackgroundTransparency = 1, Position = UDim2.new(1, -24, 0, 0), Size = UDim2.new(0, 20, 0, 36),
+			ZIndex = 5, Parent = ConfigMainRow,
+		})
+
+		local ConfigListFrame = New("Frame", {
+			Position = UDim2.new(0, 0, 0, 36), Size = UDim2.new(1, 0, 0, 0),
+			BackgroundColor3 = Theme.PanelLight, ZIndex = 5, Parent = ConfigDropdownHolder,
+		})
+		local ConfigListLayout = New("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = ConfigListFrame })
+
+		local selectedConfig = nil
+		local configOpen = false
+		local configButtons = {}
+
+		local function RefreshConfigList()
+			for _, b in ipairs(configButtons) do b:Destroy() end
+			configButtons = {}
+			local ok, list = pcall(EWEHUB.SafeIO.ListConfigs)
+			if not ok or not list then list = {} end
+			for _, cfgName in ipairs(list) do
+				local Btn = New("TextButton", {
+					Text = cfgName, Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = Theme.Text,
+					BackgroundColor3 = Theme.PanelLight, Size = UDim2.new(1, 0, 0, 26),
+					AutoButtonColor = false, ZIndex = 5, Parent = ConfigListFrame,
+				})
+				Btn.MouseEnter:Connect(function() Tween(Btn, FastTween, { BackgroundColor3 = Theme.AccentDark }) end)
+				Btn.MouseLeave:Connect(function() Tween(Btn, FastTween, { BackgroundColor3 = Theme.PanelLight }) end)
+				Btn.MouseButton1Click:Connect(function()
+					selectedConfig = cfgName
+					ConfigSelectedLabel.Text = cfgName
+					configOpen = false
+					Tween(ConfigDropdownHolder, FastTween, { Size = UDim2.new(1, 0, 0, 36) })
+					Tween(ConfigArrow, FastTween, { Rotation = 0 })
+				end)
+				table.insert(configButtons, Btn)
+			end
+		end
+		RefreshConfigList()
+
+		ConfigMainRow.MouseButton1Click:Connect(function()
+			configOpen = not configOpen
+			local targetHeight = configOpen and (36 + ConfigListLayout.AbsoluteContentSize.Y) or 36
+			Tween(ConfigDropdownHolder, MediumTween, { Size = UDim2.new(1, 0, 0, targetHeight) })
+			Tween(ConfigArrow, FastTween, { Rotation = configOpen and 180 or 0 })
+		end)
+
+		-- Tombol Simpan / Muat / Hapus
+		local ButtonRow = New("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Parent = SettingsPage })
+		New("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			Padding = UDim.new(0, 6),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Parent = ButtonRow,
+		})
+
+		local function MiniButton(text, bgColor)
+			local btnColor = bgColor or Theme.Panel
+			local Btn = New("TextButton", {
+				Text = text, Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Theme.Text,
+				BackgroundColor3 = btnColor, Size = UDim2.new(0.333, -4, 1, 0),
+				AutoButtonColor = false, Parent = ButtonRow,
+			}, { Corner(8), Stroke() })
+			Btn.MouseEnter:Connect(function() Tween(Btn, FastTween, { BackgroundColor3 = Theme.AccentDark }) end)
+			Btn.MouseLeave:Connect(function() Tween(Btn, FastTween, { BackgroundColor3 = btnColor }) end)
+			return Btn
+		end
+
+		local SaveBtn = MiniButton("💾 Simpan")
+		local LoadBtn = MiniButton("📂 Muat")
+		local DeleteBtn = MiniButton("🗑 Hapus", Theme.Danger)
+
+		SaveBtn.MouseButton1Click:Connect(function()
+			local name = ConfigNameInput.Text ~= "" and ConfigNameInput.Text or selectedConfig
+			if not name or name == "" then
+				EWEHUB:Notify({ Title = "Config", Content = "Isi nama config dulu.", Duration = 3 })
+				return
+			end
+			local ok = EWEHUB.SafeIO.SaveConfig(name, EWEHUB.Flags)
+			if ok then
+				EWEHUB:Notify({ Title = "Config", Content = "Config '" .. name .. "' tersimpan.", Duration = 3 })
+				ConfigNameInput.Text = ""
+				RefreshConfigList()
+			end
+		end)
+
+		LoadBtn.MouseButton1Click:Connect(function()
+			if not selectedConfig then
+				EWEHUB:Notify({ Title = "Config", Content = "Pilih config dulu dari dropdown.", Duration = 3 })
+				return
+			end
+			local data = EWEHUB.SafeIO.LoadConfig(selectedConfig)
+			if not data then
+				EWEHUB:Notify({ Title = "Config", Content = "Gagal memuat config.", Duration = 3 })
+				return
+			end
+			for flagName, value in pairs(data) do
+				if EWEHUB.ConfigCallbacks[flagName] then
+					SafeCall(EWEHUB.ConfigCallbacks[flagName], value)
+				else
+					EWEHUB.Flags[flagName] = value
+				end
+			end
+			EWEHUB:Notify({ Title = "Config", Content = "Config '" .. selectedConfig .. "' dimuat.", Duration = 3 })
+		end)
+
+		DeleteBtn.MouseButton1Click:Connect(function()
+			if not selectedConfig then
+				EWEHUB:Notify({ Title = "Config", Content = "Pilih config dulu dari dropdown.", Duration = 3 })
+				return
+			end
+			EWEHUB.SafeIO.DeleteConfig(selectedConfig)
+			EWEHUB:Notify({ Title = "Config", Content = "Config '" .. selectedConfig .. "' dihapus.", Duration = 3 })
+			selectedConfig = nil
+			ConfigSelectedLabel.Text = "Pilih..."
+			RefreshConfigList()
+		end)
 	end
 
 	self.Windows[windowName] = Window
+
+	if watermarkEnabled then
+		Window.Watermark = SetupWatermark(windowName, Theme)
+	end
 
 	-- Tampilkan cutscene pembuka, lalu window utama, lalu (opsional) popup Discord
 	Main.Visible = true
