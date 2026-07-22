@@ -941,12 +941,20 @@ function EWEHUB:CreateWindow(config)
 	-- kasih UICorner senilai radius Main ke keduanya juga — sudut atas
 	-- toh ketutup TopBar, sudut bawah jadi ikut melengkung dengan benar.
 	local TabListWidth = IsMobile() and 84 or 118
-	local TabList = New("Frame", {
+	-- FIX: TabList sebelumnya cuma Frame biasa — kalau tab-nya banyak
+	-- (lebih dari muat 1 layar), sisanya (termasuk tab "Pengaturan" yang
+	-- dipin di paling bawah) jadi kepotong dan TIDAK BISA di-scroll sama
+	-- sekali. Sekarang jadi ScrollingFrame supaya selalu bisa digulir.
+	local TabList = New("ScrollingFrame", {
 		Size = UDim2.new(0, TabListWidth, 1, -42),
 		Position = UDim2.new(0, 0, 0, 42),
 		BackgroundColor3 = Theme.Panel,
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Theme.Accent,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
 		Parent = Main,
 	}, { Corner(16) })
 	New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = TabList })
@@ -1184,6 +1192,12 @@ function EWEHUB:CreateWindow(config)
 				EWEHUB.ConfigCallbacks[flagName] = function(v) SetState(v, true) end
 			end
 
+			-- FIX: sinkronkan Callback dengan nilai Default sejak awal.
+			-- Sebelumnya Default cuma tampil di UI tapi Callback baru
+			-- kepanggil kalau user klik manual — bikin variabel eksternal
+			-- (di script pemakai) nggak sinkron kalau Default = true.
+			if opt.Callback then task.spawn(SafeCall, opt.Callback, state) end
+
 			return { Set = SetState, Get = function() return state end }
 		end
 
@@ -1252,6 +1266,8 @@ function EWEHUB:CreateWindow(config)
 				EWEHUB.Flags[flagName] = value
 				EWEHUB.ConfigCallbacks[flagName] = function(v) SetValue(v, true) end
 			end
+
+			if opt.Callback then task.spawn(SafeCall, opt.Callback, value) end
 
 			return { Set = SetValue, Get = function() return value end }
 		end
@@ -1379,11 +1395,27 @@ function EWEHUB:CreateWindow(config)
 			RefreshOptions()
 			RefreshSelectedLabel()
 
+			local function UpdateHolderHeight()
+				if open then
+					Tween(Holder, FastTween, { Size = UDim2.new(1, 0, 0, 36 + ListLayout.AbsoluteContentSize.Y) })
+				end
+			end
+			-- FIX: AbsoluteContentSize kadang belum ke-update kalau dibaca
+			-- LANGSUNG saat itu juga (Roblox baru hitung ulang di frame
+			-- berikutnya) — bikin dropdown kelihatan "macet" (kebuka tapi
+			-- tinggi 0 / gak keliatan isinya). Sekarang dengar perubahan
+			-- ukurannya secara live, dan tunda 1 frame pas baru dibuka.
+			ListLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(UpdateHolderHeight)
+
 			MainRow.MouseButton1Click:Connect(function()
 				open = not open
-				local targetHeight = open and (36 + ListLayout.AbsoluteContentSize.Y) or 36
-				Tween(Holder, MediumTween, { Size = UDim2.new(1, 0, 0, targetHeight) })
 				Tween(Arrow, FastTween, { Rotation = open and 180 or 0 })
+				if open then
+					Tween(Holder, MediumTween, { Size = UDim2.new(1, 0, 0, 36 + ListLayout.AbsoluteContentSize.Y) })
+					task.defer(UpdateHolderHeight)
+				else
+					Tween(Holder, MediumTween, { Size = UDim2.new(1, 0, 0, 36) })
+				end
 			end)
 
 			function api.SetOptions(newOptions) options = newOptions RefreshOptions() end
@@ -1435,6 +1467,13 @@ function EWEHUB:CreateWindow(config)
 				EWEHUB.ConfigCallbacks[flagName] = function(v) api.Set(v, true) end
 			end
 
+			-- FIX UTAMA: sebelumnya Default cuma tampil di label dropdown,
+			-- tapi Callback baru kepanggil kalau user klik opsi secara
+			-- manual. Akibatnya variabel eksternal (mis. SelectedDropdownConfig
+			-- di script pemakai) tetap kosong walau dropdown KELIHATAN sudah
+			-- ada pilihan — bikin tombol "Muat" dkk seperti macet/gak respons.
+			if opt.Callback then task.spawn(SafeCall, opt.Callback, api.Get()) end
+
 			return api
 		end
 
@@ -1461,6 +1500,8 @@ function EWEHUB:CreateWindow(config)
 				EWEHUB.Flags[flagName] = Box.Text
 				EWEHUB.ConfigCallbacks[flagName] = function(v) Box.Text = v end
 			end
+
+			if opt.Callback then task.spawn(SafeCall, opt.Callback, Box.Text, false) end
 
 			return { Set = function(v) Box.Text = v end, Get = function() return Box.Text end, Instance = Box }
 		end
@@ -1588,6 +1629,8 @@ function EWEHUB:CreateWindow(config)
 				EWEHUB.ConfigCallbacks[flagName] = function(v) api.Set(v, true) end
 			end
 
+			if opt.Callback then task.spawn(SafeCall, opt.Callback, color) end
+
 			return api
 		end
 
@@ -1647,6 +1690,8 @@ function EWEHUB:CreateWindow(config)
 				EWEHUB.Flags[flagName] = currentKey
 				EWEHUB.ConfigCallbacks[flagName] = function(v) api.Set(v, true) end
 			end
+
+			if opt.Callback and currentKey then task.spawn(SafeCall, opt.Callback, currentKey, false) end
 
 			return api
 		end
