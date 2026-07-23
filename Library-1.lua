@@ -3,7 +3,15 @@
 	 EWEHUB
 	 UI Library untuk Roblox — dibuat murni dengan Luau.
 	 Dibuat oleh: Asep
-	 Versi: 4.2.0
+	 Versi: 4.3.1
+
+	 CATATAN PERUBAHAN v4.3.1:
+	 1. Minimize diganti model "collapse-to-bar" (ala Rayfield) — window
+	    mengecil jadi cuma nyisain top bar DI TEMPAT YANG SAMA, bukan lagi
+	    jadi ikon bulat 🚀 terpisah yang melayang di layar. Ini menghindari
+	    masalah "ikon gak nyambung sama tema script", dan lebih ringan di
+	    hp low-end karena cuma resize 1 frame + toggle Visible (gak perlu
+	    bikin/drag objek baru sama sekali).
 
 	 CATATAN PERUBAHAN v4.2.0 (fitur baru):
 	 1. RELIABILITAS: semua Callback sekarang dibungkus SafeCall (pcall) —
@@ -73,11 +81,16 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local EWEHUB = {}
 EWEHUB.__index = EWEHUB
 
-EWEHUB.Version  = "4.2.0"
+EWEHUB.Version  = "4.3.1"
 EWEHUB.Author   = "Asep"
 EWEHUB.Windows  = {}
 EWEHUB.Flags    = {}
 EWEHUB.ConfigCallbacks = {}
+
+-- Data custom di luar kontrol UI (Toggle/Slider/dst) yang mau ikut
+-- disimpan/dimuat lewat tab "💾 Konfig" bawaan. Didaftarkan lewat
+-- EWEHUB:RegisterConfigField(key, getFn, setFn) — lihat §RegisterConfigField.
+EWEHUB.CustomConfigFields = {}
 
 -- ScreenGui semua elemen library selalu memakai DisplayOrder ini
 -- supaya tetap berada di layer teratas, di atas GUI game/library lain.
@@ -229,21 +242,48 @@ local function NewTopScreenGui(name, parentOverride)
 end
 
 --============================================================
+-- HWID — dipakai bareng buat isolasi folder config & info di tab
+-- Pengaturan. Dicoba dari beberapa nama fungsi umum yang disediakan
+-- executor; fallback "unknown" kalau tidak ada satupun yang didukung.
+--============================================================
+local function GetHWID()
+	local hwidFnNames = { "gethwid", "get_hwid", "getHWID", "get_hardware_id" }
+	local env = (typeof(getgenv) == "function") and getgenv() or _G
+	for _, fnName in ipairs(hwidFnNames) do
+		local fn = env[fnName]
+		if typeof(fn) == "function" then
+			local ok, result = pcall(fn)
+			if ok and result and tostring(result) ~= "" then
+				-- Bersihkan karakter yang tidak aman buat nama folder
+				return (tostring(result):gsub("[^%w%-]", "_"))
+			end
+		end
+	end
+	return "unknown"
+end
+
+local CurrentHWID = GetHWID()
+
+--============================================================
 -- PENYIMPANAN CONFIG (aman untuk executor maupun Studio)
+-- Folder diisolasi PER-HWID: EWEHUB/configs/<hwid>/<nama>.json — jadi
+-- config dari 1 perangkat tidak akan kecampur/kelihatan di perangkat lain.
 --============================================================
 local SafeIO = {}
 local MemoryStore = {}
 local HasFileSystem = (typeof(writefile) == "function") and (typeof(readfile) == "function")
+local ConfigDir = "EWEHUB/configs/" .. CurrentHWID
 
 if HasFileSystem and typeof(isfolder) == "function" and typeof(makefolder) == "function" then
 	if not isfolder("EWEHUB") then makefolder("EWEHUB") end
 	if not isfolder("EWEHUB/configs") then makefolder("EWEHUB/configs") end
+	if not isfolder(ConfigDir) then makefolder(ConfigDir) end
 end
 
 function SafeIO.SaveConfig(name, data)
 	local encoded = HttpService:JSONEncode(data)
 	if HasFileSystem then
-		local ok = pcall(writefile, "EWEHUB/configs/" .. name .. ".json", encoded)
+		local ok = pcall(writefile, ConfigDir .. "/" .. name .. ".json", encoded)
 		if ok then return true end
 	end
 	MemoryStore[name] = encoded
@@ -252,7 +292,7 @@ end
 
 function SafeIO.LoadConfig(name)
 	if HasFileSystem then
-		local ok, content = pcall(readfile, "EWEHUB/configs/" .. name .. ".json")
+		local ok, content = pcall(readfile, ConfigDir .. "/" .. name .. ".json")
 		if ok and content then
 			local success, decoded = pcall(HttpService.JSONDecode, HttpService, content)
 			if success then return decoded end
@@ -268,8 +308,8 @@ end
 function SafeIO.DeleteConfig(name)
 	if HasFileSystem then
 		pcall(function()
-			if typeof(isfile) == "function" and isfile("EWEHUB/configs/" .. name .. ".json") then
-				delfile("EWEHUB/configs/" .. name .. ".json")
+			if typeof(isfile) == "function" and isfile(ConfigDir .. "/" .. name .. ".json") then
+				delfile(ConfigDir .. "/" .. name .. ".json")
 			end
 		end)
 	end
@@ -289,7 +329,7 @@ end
 function SafeIO.ListConfigs()
 	local list = {}
 	if HasFileSystem and typeof(listfiles) == "function" then
-		local ok, files = pcall(listfiles, "EWEHUB/configs")
+		local ok, files = pcall(listfiles, ConfigDir)
 		if ok then
 			for _, path in ipairs(files) do
 				local name = path:match("([^/\\]+)%.json$")
@@ -303,6 +343,7 @@ function SafeIO.ListConfigs()
 end
 
 EWEHUB.SafeIO = SafeIO
+EWEHUB.HWID = CurrentHWID
 
 --============================================================
 -- SetTheme — reskin seluruh library (dipanggil sebelum CreateWindow)
@@ -313,6 +354,28 @@ function EWEHUB:SetTheme(overrides)
 			self.Theme[k] = v
 		end
 	end
+end
+
+--============================================================
+-- RegisterConfigField — daftarkan data CUSTOM (di luar kontrol UI
+-- yang punya Flag) supaya ikut ke-save/ke-load lewat tab "💾 Konfig"
+-- bawaan. Berguna buat variabel biasa di script pemakai library
+-- (mis. tabel `Settings` sendiri) yang bukan hasil dari Tab:Create...
+--
+-- Contoh:
+--   EWEHUB:RegisterConfigField("LoopSpeed",
+--       function() return MySettings.LoopSpeed end,      -- Get
+--       function(v) MySettings.LoopSpeed = v end)        -- Set
+--============================================================
+function EWEHUB:RegisterConfigField(key, getFn, setFn)
+	assert(type(key) == "string" and key ~= "", "RegisterConfigField: key harus string")
+	assert(typeof(getFn) == "function", "RegisterConfigField: getFn harus function")
+	assert(typeof(setFn) == "function", "RegisterConfigField: setFn harus function")
+	self.CustomConfigFields[key] = { Get = getFn, Set = setFn }
+end
+
+function EWEHUB:UnregisterConfigField(key)
+	self.CustomConfigFields[key] = nil
 end
 
 --============================================================
@@ -883,45 +946,41 @@ function EWEHUB:CreateWindow(config)
 		btn.MouseLeave:Connect(function() Tween(btn, FastTween, { BackgroundColor3 = Theme.PanelLight }) end)
 	end
 
-	local FloatIcon = New("TextButton", {
-		Name = "FloatIcon",
-		Text = "🚀",
-		Font = Enum.Font.GothamBold,
-		TextSize = 22,
-		BackgroundColor3 = Theme.Panel,
-		Size = UDim2.new(0, 0, 0, 0),
-		Position = UDim2.new(0, 20, 0.5, -25),
-		Visible = false,
-		AutoButtonColor = false,
-		Parent = ScreenGui,
-	}, { Corner(25), Stroke(Theme.Accent, 1.5) })
+	-- Forward-declare, diisi pas TabList/ContentArea dibuat di bawah —
+	-- dipakai Minimize/Restore buat sembunyiin isi window pas di-collapse.
+	local TabList, ContentArea
 
+	local TopBarHeight = 42
 	local isMinimized = false
+
+	-- Model "collapse-to-bar" (ala Rayfield): window mengecil jadi cuma
+	-- nyisain top bar di TEMPAT YANG SAMA — bukan jadi ikon bulat terpisah
+	-- (jadi gak ada masalah "logo gak sesuai tema script"), dan lebih
+	-- ringan buat hp low-end karena cuma resize 1 frame + toggle Visible,
+	-- gak perlu bikin/drag objek baru.
 	local function Minimize()
 		isMinimized = true
-		Tween(Main, MediumTween, { Size = UDim2.new(Main.Size.X.Scale, Main.Size.X.Offset, 0, 0), BackgroundTransparency = 1 })
-		task.delay(0.26, function()
-			Main.Visible = false
-			FloatIcon.Visible = true
-			Tween(FloatIcon, SlowTween, { Size = UDim2.new(0, 50, 0, 50) })
+		MinimizeBtn.Text = "▾"
+		Tween(Main, MediumTween, { Size = UDim2.new(Main.Size.X.Scale, Main.Size.X.Offset, 0, TopBarHeight) })
+		task.delay(0.2, function()
+			if isMinimized then
+				if TabList then TabList.Visible = false end
+				if ContentArea then ContentArea.Visible = false end
+			end
 		end)
 	end
 
 	local function Restore()
 		isMinimized = false
-		Tween(FloatIcon, FastTween, { Size = UDim2.new(0, 0, 0, 0) })
-		task.delay(0.14, function()
-			FloatIcon.Visible = false
-			Main.Visible = true
-			Main.Size = UDim2.new(windowSize.X.Scale, windowSize.X.Offset, 0, 0)
-			Main.BackgroundTransparency = 1
-			Tween(Main, SlowTween, { Size = windowSize, BackgroundTransparency = 0 })
-		end)
+		MinimizeBtn.Text = "—"
+		if TabList then TabList.Visible = true end
+		if ContentArea then ContentArea.Visible = true end
+		Tween(Main, SlowTween, { Size = windowSize })
 	end
 
-	MinimizeBtn.MouseButton1Click:Connect(Minimize)
-	FloatIcon.MouseButton1Click:Connect(Restore)
-	MakeDraggable(FloatIcon, FloatIcon)
+	MinimizeBtn.MouseButton1Click:Connect(function()
+		if isMinimized then Restore() else Minimize() end
+	end)
 	MakeDraggable(TopBar, Main)
 
 	-- toggle show/hide dengan keybind
@@ -945,7 +1004,7 @@ function EWEHUB:CreateWindow(config)
 	-- (lebih dari muat 1 layar), sisanya (termasuk tab "Pengaturan" yang
 	-- dipin di paling bawah) jadi kepotong dan TIDAK BISA di-scroll sama
 	-- sekali. Sekarang jadi ScrollingFrame supaya selalu bisa digulir.
-	local TabList = New("ScrollingFrame", {
+	TabList = New("ScrollingFrame", {
 		Size = UDim2.new(0, TabListWidth, 1, -42),
 		Position = UDim2.new(0, 0, 0, 42),
 		BackgroundColor3 = Theme.Panel,
@@ -960,7 +1019,7 @@ function EWEHUB:CreateWindow(config)
 	New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = TabList })
 	Padding(10).Parent = TabList
 
-	local ContentArea = New("Frame", {
+	ContentArea = New("Frame", {
 		Size = UDim2.new(1, -TabListWidth, 1, -42),
 		Position = UDim2.new(0, TabListWidth, 0, 42),
 		BackgroundColor3 = Theme.Background,
@@ -1804,20 +1863,9 @@ function EWEHUB:CreateWindow(config)
 			Parent = ProfileCard,
 		})
 
-		-- HWID — dicoba dari beberapa nama fungsi umum yang disediakan executor
-		local hwid = "Tidak tersedia"
-		local hwidFnNames = { "gethwid", "get_hwid", "getHWID", "get_hardware_id" }
-		local env = (typeof(getgenv) == "function") and getgenv() or _G
-		for _, fnName in ipairs(hwidFnNames) do
-			local fn = env[fnName]
-			if typeof(fn) == "function" then
-				local ok, result = pcall(fn)
-				if ok and result and tostring(result) ~= "" then
-					hwid = tostring(result)
-					break
-				end
-			end
-		end
+		-- HWID dipakai dari CurrentHWID (dihitung sekali di level module,
+		-- sama persis dengan yang dipakai buat isolasi folder config).
+		local hwid = CurrentHWID ~= "unknown" and CurrentHWID or "Tidak tersedia"
 
 		-- Nama executor (kalau tersedia)
 		local executorName = "Tidak diketahui"
@@ -1864,16 +1912,88 @@ function EWEHUB:CreateWindow(config)
 		InfoRow("HWID", hwid)
 		InfoRow("Executor", executorName)
 		InfoRow("Library", "EWEHUB v" .. EWEHUB.Version .. " by " .. EWEHUB.Author)
+	end
 
-		-- ===== Panel Konfigurasi (Save / Load / Delete) =====
+	--------------------------------------------------------------
+	-- TAB BAWAAN "💾 Konfig" — pinned, terpisah dari Pengaturan.
+	-- Simpan/Muat/Hapus config, otomatis mencakup:
+	--   1. Semua kontrol yang punya Flag (EWEHUB.Flags)
+	--   2. Semua data custom yang didaftarkan lewat
+	--      EWEHUB:RegisterConfigField(key, getFn, setFn)
+	-- Disimpan di folder YANG DIISOLASI PER-HWID (lihat CurrentHWID di
+	-- atas) — config dari 1 device tidak akan kecampur ke device lain.
+	--------------------------------------------------------------
+	do
+		local function BuildConfigSnapshot()
+			local snapshot = {}
+			for k, v in pairs(EWEHUB.Flags) do
+				snapshot[k] = v
+			end
+			for key, field in pairs(EWEHUB.CustomConfigFields) do
+				local ok, value = pcall(field.Get)
+				if ok then snapshot[key] = value end
+			end
+			return snapshot
+		end
+
+		local function ApplyConfigSnapshot(data)
+			for key, value in pairs(data) do
+				if EWEHUB.CustomConfigFields[key] then
+					SafeCall(EWEHUB.CustomConfigFields[key].Set, value)
+				elseif EWEHUB.ConfigCallbacks[key] then
+					SafeCall(EWEHUB.ConfigCallbacks[key], value)
+				else
+					EWEHUB.Flags[key] = value
+				end
+			end
+		end
+
+		local KonfigButton = New("TextButton", {
+			Text = "💾  Konfig",
+			Font = Enum.Font.GothamMedium,
+			TextSize = 13,
+			TextColor3 = Theme.SubText,
+			BackgroundColor3 = Theme.PanelLight,
+			Size = UDim2.new(1, 0, 0, 32),
+			AutoButtonColor = false,
+			LayoutOrder = 9998, -- pinned, tepat sebelum "Pengaturan" (9999)
+			Parent = TabList,
+		}, { Corner(8) })
+
+		local KonfigPage = New("ScrollingFrame", {
+			Name = "Konfig_Page",
+			Size = UDim2.new(1, -20, 1, -54),
+			Position = UDim2.new(0, 10, 0, 44),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 3,
+			ScrollBarImageColor3 = Theme.Accent,
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			Visible = false,
+			Parent = ContentArea,
+		})
+		New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = KonfigPage })
+
+		KonfigButton.MouseEnter:Connect(function()
+			if not KonfigPage.Visible then Tween(KonfigButton, FastTween, { BackgroundColor3 = Theme.Stroke }) end
+		end)
+		KonfigButton.MouseLeave:Connect(function()
+			if not KonfigPage.Visible then Tween(KonfigButton, FastTween, { BackgroundColor3 = Theme.PanelLight }) end
+		end)
+
+		local KonfigEntry = { Button = KonfigButton, Page = KonfigPage }
+		table.insert(AllPages, KonfigEntry)
+		KonfigButton.MouseButton1Click:Connect(function() SwitchTo(KonfigEntry) end)
+
 		New("TextLabel", {
-			Text = "Konfigurasi",
-			Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = Theme.SubText,
-			TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
-			Size = UDim2.new(1, 0, 0, 20), Parent = SettingsPage,
+			Text = "Config diisolasi per perangkat — HWID: " .. (CurrentHWID ~= "unknown" and CurrentHWID or "tidak tersedia"),
+			Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Theme.SubText,
+			TextWrapped = true, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+			Size = UDim2.new(1, 0, 0, 28), Parent = KonfigPage,
 		})
 
-		local ConfigNameHolder = New("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel, Parent = SettingsPage }, { Corner(10), Stroke() })
+		local ConfigNameHolder = New("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel, Parent = KonfigPage }, { Corner(10), Stroke() })
 		local ConfigNameInput = New("TextBox", {
 			Text = "", PlaceholderText = "Nama config baru...",
 			Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Theme.Text, PlaceholderColor3 = Theme.SubText,
@@ -1884,7 +2004,7 @@ function EWEHUB:CreateWindow(config)
 		-- Dropdown mini buat pilih config yang sudah tersimpan
 		local ConfigDropdownHolder = New("Frame", {
 			Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel,
-			ClipsDescendants = true, ZIndex = 5, Parent = SettingsPage,
+			ClipsDescendants = true, ZIndex = 5, Parent = KonfigPage,
 		}, { Corner(10), Stroke() })
 
 		local ConfigMainRow = New("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 36), ZIndex = 5, Parent = ConfigDropdownHolder })
@@ -1950,7 +2070,7 @@ function EWEHUB:CreateWindow(config)
 		end)
 
 		-- Tombol Simpan / Muat / Hapus
-		local ButtonRow = New("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Parent = SettingsPage })
+		local ButtonRow = New("Frame", { Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1, Parent = KonfigPage })
 		New("UIListLayout", {
 			FillDirection = Enum.FillDirection.Horizontal,
 			Padding = UDim.new(0, 6),
@@ -1980,7 +2100,7 @@ function EWEHUB:CreateWindow(config)
 				EWEHUB:Notify({ Title = "Config", Content = "Isi nama config dulu.", Duration = 3 })
 				return
 			end
-			local ok = EWEHUB.SafeIO.SaveConfig(name, EWEHUB.Flags)
+			local ok = EWEHUB.SafeIO.SaveConfig(name, BuildConfigSnapshot())
 			if ok then
 				EWEHUB:Notify({ Title = "Config", Content = "Config '" .. name .. "' tersimpan.", Duration = 3 })
 				ConfigNameInput.Text = ""
@@ -1998,13 +2118,7 @@ function EWEHUB:CreateWindow(config)
 				EWEHUB:Notify({ Title = "Config", Content = "Gagal memuat config.", Duration = 3 })
 				return
 			end
-			for flagName, value in pairs(data) do
-				if EWEHUB.ConfigCallbacks[flagName] then
-					SafeCall(EWEHUB.ConfigCallbacks[flagName], value)
-				else
-					EWEHUB.Flags[flagName] = value
-				end
-			end
+			ApplyConfigSnapshot(data)
 			EWEHUB:Notify({ Title = "Config", Content = "Config '" .. selectedConfig .. "' dimuat.", Duration = 3 })
 		end)
 
