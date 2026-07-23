@@ -3,7 +3,15 @@
 	 EWEHUB
 	 UI Library untuk Roblox — dibuat murni dengan Luau.
 	 Dibuat oleh: Asep
-	 Versi: 4.3.1
+	 Versi: 4.3.2
+
+	 CATATAN PERUBAHAN v4.3.2:
+	 1. Minimize sekarang bener-bener COMPACT — lebar window ikut
+	    mengecil jadi pill kecil (~200px), bukan cuma tingginya doang
+	    kayak sebelumnya (yang lebarnya masih selebar window penuh dan
+	    jadi menghalangi pandangan). Tombol Close disembunyikan sementara
+	    saat minimized buat hemat ruang, tombol Minimize otomatis geser
+	    ke posisi tombol Close biar tetap rapi.
 
 	 CATATAN PERUBAHAN v4.3.1:
 	 1. Minimize diganti model "collapse-to-bar" (ala Rayfield) — window
@@ -81,7 +89,7 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local EWEHUB = {}
 EWEHUB.__index = EWEHUB
 
-EWEHUB.Version  = "4.3.1"
+EWEHUB.Version  = "4.3.2"
 EWEHUB.Author   = "Asep"
 EWEHUB.Windows  = {}
 EWEHUB.Flags    = {}
@@ -903,6 +911,7 @@ function EWEHUB:CreateWindow(config)
 		TextColor3 = Theme.Text,
 		BackgroundTransparency = 1,
 		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
 		Position = UDim2.new(0, 32, 0, 0),
 		Size = UDim2.new(0.6, 0, 1, 0),
 		Parent = TopBar,
@@ -951,17 +960,22 @@ function EWEHUB:CreateWindow(config)
 	local TabList, ContentArea
 
 	local TopBarHeight = 42
+	local MinimizedWidth = IsMobile() and 170 or 200
 	local isMinimized = false
 
-	-- Model "collapse-to-bar" (ala Rayfield): window mengecil jadi cuma
-	-- nyisain top bar di TEMPAT YANG SAMA — bukan jadi ikon bulat terpisah
-	-- (jadi gak ada masalah "logo gak sesuai tema script"), dan lebih
-	-- ringan buat hp low-end karena cuma resize 1 frame + toggle Visible,
-	-- gak perlu bikin/drag objek baru.
+	-- Model "collapse-to-bar" (ala Rayfield): window mengecil jadi pill
+	-- KECIL & COMPACT (lebar ikut mengecil, bukan cuma tingginya) di
+	-- TEMPAT YANG SAMA — bukan jadi ikon bulat terpisah (jadi gak ada
+	-- masalah "logo gak sesuai tema script"), dan lebih ringan buat hp
+	-- low-end karena cuma resize 1 frame + toggle Visible, gak perlu
+	-- bikin/drag objek baru.
 	local function Minimize()
 		isMinimized = true
 		MinimizeBtn.Text = "▾"
-		Tween(Main, MediumTween, { Size = UDim2.new(Main.Size.X.Scale, Main.Size.X.Offset, 0, TopBarHeight) })
+		Tween(CloseBtn, FastTween, { BackgroundTransparency = 1, TextTransparency = 1 })
+		task.delay(0.12, function() if isMinimized then CloseBtn.Visible = false end end)
+		Tween(MinimizeBtn, MediumTween, { Position = UDim2.new(1, -37, 0.5, -14) })
+		Tween(Main, MediumTween, { Size = UDim2.new(0, MinimizedWidth, 0, TopBarHeight) })
 		task.delay(0.2, function()
 			if isMinimized then
 				if TabList then TabList.Visible = false end
@@ -973,6 +987,9 @@ function EWEHUB:CreateWindow(config)
 	local function Restore()
 		isMinimized = false
 		MinimizeBtn.Text = "—"
+		CloseBtn.Visible = true
+		Tween(CloseBtn, FastTween, { BackgroundTransparency = 0, TextTransparency = 0 })
+		Tween(MinimizeBtn, MediumTween, { Position = UDim2.new(1, -70, 0.5, -14) })
 		if TabList then TabList.Visible = true end
 		if ContentArea then ContentArea.Visible = true end
 		Tween(Main, SlowTween, { Size = windowSize })
