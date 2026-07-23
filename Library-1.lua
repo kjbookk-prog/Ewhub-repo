@@ -3,7 +3,15 @@
 	 EWEHUB
 	 UI Library untuk Roblox — dibuat murni dengan Luau.
 	 Dibuat oleh: Asep
-	 Versi: 4.3.2
+	 Versi: 4.4.0
+
+	 CATATAN PERUBAHAN v4.4.0:
+	 1. BARU: toggle "🔁 Autoload config terpilih" di tab Konfig. Kalau
+	    dinyalain, config yang lagi dipilih otomatis ke-load lagi setiap
+	    kali script dijalankan ulang — tanpa perlu pencet apa-apa. Kalau
+	    user ganti pilihan config sementara Autoload aktif, target-nya
+	    ikut ke-update otomatis. Penanda disimpan per-HWID juga (file
+	    "_autoload" internal, gak nongol di daftar config biasa).
 
 	 CATATAN PERUBAHAN v4.3.2:
 	 1. Minimize sekarang bener-bener COMPACT — lebar window ikut
@@ -89,7 +97,7 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local EWEHUB = {}
 EWEHUB.__index = EWEHUB
 
-EWEHUB.Version  = "4.3.2"
+EWEHUB.Version  = "4.4.0"
 EWEHUB.Author   = "Asep"
 EWEHUB.Windows  = {}
 EWEHUB.Flags    = {}
@@ -341,13 +349,32 @@ function SafeIO.ListConfigs()
 		if ok then
 			for _, path in ipairs(files) do
 				local name = path:match("([^/\\]+)%.json$")
-				if name then table.insert(list, name) end
+				-- "_autoload" itu file penanda internal, bukan config biasa —
+				-- jangan sampai nongol di daftar/dropdown config.
+				if name and name ~= "_autoload" then table.insert(list, name) end
 			end
 			return list
 		end
 	end
-	for name in pairs(MemoryStore) do table.insert(list, name) end
+	for name in pairs(MemoryStore) do
+		if name ~= "_autoload" then table.insert(list, name) end
+	end
 	return list
+end
+
+-- ===== Autoload: penanda config mana yang mau otomatis di-load setiap
+-- kali script dijalankan ulang. Disimpan sebagai file config biasa
+-- bernama "_autoload" (per-HWID juga, sama seperti config lainnya). =====
+function SafeIO.SetAutoload(name)
+	return SafeIO.SaveConfig("_autoload", { enabled = true, config = name })
+end
+
+function SafeIO.ClearAutoload()
+	SafeIO.DeleteConfig("_autoload")
+end
+
+function SafeIO.GetAutoload()
+	return SafeIO.LoadConfig("_autoload")
 end
 
 EWEHUB.SafeIO = SafeIO
@@ -2054,6 +2081,14 @@ function EWEHUB:CreateWindow(config)
 		local configOpen = false
 		local configButtons = {}
 
+		-- Autoload: baca penanda yang mungkin udah tersimpan dari sesi
+		-- sebelumnya, biar toggle & dropdown-nya langsung sinkron sejak awal.
+		local existingAutoload = EWEHUB.SafeIO.GetAutoload()
+		local autoloadOn = existingAutoload ~= nil and existingAutoload.enabled == true
+		if existingAutoload and existingAutoload.config then
+			selectedConfig = existingAutoload.config
+		end
+
 		local function RefreshConfigList()
 			for _, b in ipairs(configButtons) do b:Destroy() end
 			configButtons = {}
@@ -2073,11 +2108,20 @@ function EWEHUB:CreateWindow(config)
 					configOpen = false
 					Tween(ConfigDropdownHolder, FastTween, { Size = UDim2.new(1, 0, 0, 36) })
 					Tween(ConfigArrow, FastTween, { Rotation = 0 })
+					-- Kalau Autoload lagi aktif, otomatis ikut update target-nya
+					-- ke config yang baru dipilih ini.
+					if autoloadOn then
+						EWEHUB.SafeIO.SetAutoload(selectedConfig)
+					end
 				end)
 				table.insert(configButtons, Btn)
 			end
 		end
 		RefreshConfigList()
+
+		if selectedConfig then
+			ConfigSelectedLabel.Text = selectedConfig
+		end
 
 		ConfigMainRow.MouseButton1Click:Connect(function()
 			configOpen = not configOpen
@@ -2146,10 +2190,80 @@ function EWEHUB:CreateWindow(config)
 			end
 			EWEHUB.SafeIO.DeleteConfig(selectedConfig)
 			EWEHUB:Notify({ Title = "Config", Content = "Config '" .. selectedConfig .. "' dihapus.", Duration = 3 })
+			if autoloadOn and existingAutoload and existingAutoload.config == selectedConfig then
+				autoloadOn = false
+				EWEHUB.SafeIO.ClearAutoload()
+			end
 			selectedConfig = nil
 			ConfigSelectedLabel.Text = "Pilih..."
 			RefreshConfigList()
 		end)
+
+		-- ===== Toggle Autoload =====
+		local AutoloadHolder = New("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Theme.Panel, Parent = KonfigPage }, { Corner(10), Stroke() })
+
+		New("TextLabel", {
+			Text = "🔁 Autoload config terpilih",
+			Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = Theme.Text,
+			TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1,
+			Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -60, 1, 0), Parent = AutoloadHolder,
+		})
+
+		local AutoloadSwitch = New("Frame", {
+			Size = UDim2.new(0, 40, 0, 20), Position = UDim2.new(1, -50, 0.5, -10),
+			BackgroundColor3 = autoloadOn and Theme.Accent or Theme.Stroke, Parent = AutoloadHolder,
+		}, { Corner(10) })
+
+		local AutoloadKnob = New("Frame", {
+			Size = UDim2.new(0, 16, 0, 16),
+			Position = autoloadOn and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8),
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255), Parent = AutoloadSwitch,
+		}, { Corner(8) })
+
+		local AutoloadClickArea = New("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.new(1, 0, 1, 0), Parent = AutoloadHolder })
+
+		AutoloadClickArea.MouseButton1Click:Connect(function()
+			if not autoloadOn then
+				if not selectedConfig then
+					EWEHUB:Notify({ Title = "Autoload", Content = "Pilih config dulu sebelum nyalain Autoload.", Duration = 3 })
+					return
+				end
+				autoloadOn = true
+				EWEHUB.SafeIO.SetAutoload(selectedConfig)
+				EWEHUB:Notify({
+					Title = "Autoload",
+					Content = "Config '" .. selectedConfig .. "' bakal otomatis dimuat tiap script dijalankan lagi.",
+					Duration = 4,
+				})
+			else
+				autoloadOn = false
+				EWEHUB.SafeIO.ClearAutoload()
+				EWEHUB:Notify({ Title = "Autoload", Content = "Autoload dimatikan.", Duration = 3 })
+			end
+			Tween(AutoloadSwitch, FastTween, { BackgroundColor3 = autoloadOn and Theme.Accent or Theme.Stroke })
+			Tween(AutoloadKnob, FastTween, { Position = autoloadOn and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8) })
+		end)
+
+		-- ===== Terapkan Autoload (kalau aktif) =====
+		-- Dikasih jeda ~1.5 detik supaya seluruh Tab:Create... di script
+		-- pemakai library (yang berjalan SETELAH CreateWindow return)
+		-- sudah sempat selesai dibuat & mendaftarkan ConfigCallbacks-nya,
+		-- sebelum kita coba apply config secara otomatis.
+		if existingAutoload and existingAutoload.enabled and existingAutoload.config then
+			local autoloadTarget = existingAutoload.config
+			task.spawn(function()
+				task.wait(1.5)
+				local data = EWEHUB.SafeIO.LoadConfig(autoloadTarget)
+				if data then
+					ApplyConfigSnapshot(data)
+					EWEHUB:Notify({
+						Title = "Autoload",
+						Content = "Config '" .. autoloadTarget .. "' otomatis dimuat.",
+						Duration = 4,
+					})
+				end
+			end)
+		end
 	end
 
 	self.Windows[windowName] = Window
