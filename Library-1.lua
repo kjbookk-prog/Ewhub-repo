@@ -3,7 +3,25 @@
 	 EWEHUB
 	 UI Library untuk Roblox — dibuat murni dengan Luau.
 	 Dibuat oleh: Asep
-	 Versi: 4.5.0
+	 Versi: 4.6.0
+
+	 CATATAN PERUBAHAN v4.6.0:
+	 1. FIX: mode micro-minimize dulu kelihatan kayak "blob"/tonjolan
+	    aneh — ternyata patch perata-sudut TopBar (buat nyambung ke
+	    ContentArea pas full) ikut nongol padahal window udah sekecil
+	    TopBar doang. Sekarang patch itu disembunyikan pas compact/micro,
+	    dan micro dibikin jadi lingkaran kecil sempurna (42x42, radius
+	    dinamis) alih-alih segi panjang ambigu.
+	 2. FIX: background Watermark kadang kepotong/ketembus teks kalau
+	    nama window panjang. Sekarang lebarnya auto-size ngikutin teks.
+	 3. Teks Watermark sekarang SELALU "EWEHUB" (brand library), bukan
+	    lagi nama window custom developer — judul custom tetap tampil
+	    normal di TopBar window utama, watermark cuma identitas kecil.
+	 4. Tab "📖 Petunjuk" terpisah DIHAPUS. Diganti banner catatan yang
+	    otomatis nampil PINNED DI PALING ATAS setiap tab yang dibuat lewat
+	    Window:CreateTab — baik pakai Notes global (config.Notes /
+	    Window:SetNotes /:AddNote) maupun Notes khusus per-tab lewat
+	    Window:CreateTab({ Notes = "..." }).
 
 	 CATATAN PERUBAHAN v4.5.0:
 	 1. Top bar sekarang punya 3 tombol wajib ala title bar OS:
@@ -111,7 +129,7 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local EWEHUB = {}
 EWEHUB.__index = EWEHUB
 
-EWEHUB.Version  = "4.5.0"
+EWEHUB.Version  = "4.6.0"
 EWEHUB.Author   = "Asep"
 EWEHUB.Windows  = {}
 EWEHUB.Flags    = {}
@@ -813,12 +831,17 @@ end
 local function SetupWatermark(windowName, Theme)
 	local WMGui = NewTopScreenGui("EWEHUB_Watermark_" .. windowName)
 
+	-- CATATAN: teks watermark SENGAJA selalu "EWEHUB" (nama library),
+	-- BUKAN windowName (judul custom developer) — judul custom itu udah
+	-- ditampilkan di TopBar window utama. Watermark cuma identitas
+	-- kecil + statistik performa, harus konsisten apapun nama window-nya.
 	local WM = New("Frame", {
-		Size = UDim2.new(0, 190, 0, 26),
+		Size = UDim2.new(0, 0, 0, 26),
+		AutomaticSize = Enum.AutomaticSize.X, -- lebar ngikutin panjang teks, gak akan kepotong lagi
 		Position = UDim2.new(0, 10, 0, 10),
 		BackgroundColor3 = Theme.Panel,
 		Parent = WMGui,
-	}, { Corner(8), Stroke() })
+	}, { Corner(8), Stroke(), Padding(0, 12, 0, 0) })
 
 	New("Frame", {
 		Size = UDim2.new(0, 6, 0, 6),
@@ -828,10 +851,11 @@ local function SetupWatermark(windowName, Theme)
 	}, { Corner(3) })
 
 	local Label = New("TextLabel", {
-		Text = windowName .. " | FPS: -- | Ping: --ms",
+		Text = "EWEHUB | FPS: -- | Ping: --ms",
 		Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = Theme.Text,
 		BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
-		Position = UDim2.new(0, 20, 0, 0), Size = UDim2.new(1, -26, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Position = UDim2.new(0, 20, 0, 0), Size = UDim2.new(0, 0, 1, 0),
 		Parent = WM,
 	})
 
@@ -860,7 +884,7 @@ local function SetupWatermark(windowName, Theme)
 				if ok and val then ping = tostring(math.floor(val)) end
 			end
 
-			Label.Text = windowName .. " | FPS: " .. fps .. " | Ping: " .. ping .. "ms"
+			Label.Text = "EWEHUB | FPS: " .. fps .. " | Ping: " .. ping .. "ms"
 		end
 
 		heartbeatConn:Disconnect()
@@ -913,6 +937,7 @@ function EWEHUB:CreateWindow(config)
 		and UDim2.new(0, 430, 0, 260)
 		or UDim2.new(0, 700, 0, 320)
 
+	local MainCorner = Corner(16)
 	local Main = New("Frame", {
 		Name = "Main",
 		Size = windowSize,
@@ -922,7 +947,7 @@ function EWEHUB:CreateWindow(config)
 		ClipsDescendants = true,
 		Visible = false,
 		Parent = ScreenGui,
-	}, { Corner(16), Stroke(Theme.Stroke, 1) })
+	}, { MainCorner, Stroke(Theme.Stroke, 1) })
 
 	-- TOP BAR
 	local TopBar = New("Frame", {
@@ -932,7 +957,12 @@ function EWEHUB:CreateWindow(config)
 		Parent = Main,
 	}, { Corner(16) })
 
-	New("Frame", {
+	-- Patch buat "meratakan" sudut bawah TopBar (biar nyambung mulus ke
+	-- TabList/ContentArea pas window FULL). CATATAN: WAJIB disembunyikan
+	-- pas compact/micro (window Cuma setinggi TopBar) — kalau enggak,
+	-- patch persegi ini nongol lewat sudut Main yang rounded dan bikin
+	-- bentuk "blob"/tonjolan aneh. Lihat SetWindowState di bawah.
+	local FlattenPatch = New("Frame", {
 		Size = UDim2.new(1, 0, 0, 16),
 		Position = UDim2.new(0, 0, 1, -16),
 		BackgroundColor3 = Theme.Panel,
@@ -947,7 +977,7 @@ function EWEHUB:CreateWindow(config)
 		Parent = TopBar,
 	}, { Corner(4) })
 
-	New("TextLabel", {
+	local TitleLabel = New("TextLabel", {
 		Text = windowName,
 		Font = Enum.Font.GothamBold,
 		TextSize = 15,
@@ -1020,13 +1050,13 @@ function EWEHUB:CreateWindow(config)
 
 	local TopBarHeight = 42
 	local CompactWidth = IsMobile() and 170 or 200
-	local MicroWidth = 50
+	local MicroWidth = TopBarHeight -- persegi sempurna, di-radius jadi lingkaran penuh
 
 	-- State machine 3 tingkat (ala title bar OS, lebih ringan buat hp
 	-- low-end daripada bikin objek/ScreenGui terpisah kayak versi lama):
 	--   "full"    -> window normal, semua isi kelihatan
-	--   "compact" -> pill kecil (~200px), cuma judul + 1 tombol restore
-	--   "micro"   -> pill super kecil (~50px), cuma 1 tombol restore
+	--   "compact" -> pill kecil (~200px), judul + 1 tombol restore
+	--   "micro"   -> lingkaran kecil (42x42), cuma 1 tombol restore
 	local windowState = "full"
 
 	local function SetWindowState(target)
@@ -1039,19 +1069,38 @@ function EWEHUB:CreateWindow(config)
 			MicroBtn.Visible = true
 			CompactBtn.Visible = true
 			CloseBtn.Visible = true
+			AccentDot.Visible = true
+			TitleLabel.Visible = true
+			FlattenPatch.Visible = true
 			if TabList then TabList.Visible = true end
 			if ContentArea then ContentArea.Visible = true end
+			Tween(MainCorner, FastTween, { CornerRadius = UDim.new(0, 16) })
 			Tween(Main, SlowTween, { Size = windowSize })
 		else
-			-- Sembunyikan 2 dari 3 tombol, sisain cuma yang jadi tombol restore
+			-- Sembunyikan semua elemen judul + 2 dari 3 tombol, sisain cuma
+			-- tombol restore-nya. FlattenPatch WAJIB disembunyikan juga,
+			-- soalnya kalau enggak dia nongol lewat sudut rounded dan bikin
+			-- bentuk aneh (lihat komentar di deklarasi FlattenPatch).
+			AccentDot.Visible = false
+			TitleLabel.Visible = false
+			FlattenPatch.Visible = false
 			MicroBtn.Visible = (target == "micro")
 			CompactBtn.Visible = (target == "compact")
 			CloseBtn.Visible = false
 
 			local targetWidth = (target == "compact") and CompactWidth or MicroWidth
 			local restoreBtn = (target == "compact") and CompactBtn or MicroBtn
-			Tween(restoreBtn, MediumTween, { Position = UDim2.new(1, -37, 0.5, -14) })
+			local restorePos = (target == "compact")
+				and UDim2.new(1, -37, 0.5, -14)   -- pill: tombol nempel kanan
+				or UDim2.new(0.5, -14, 0.5, -14)  -- lingkaran: tombol di tengah
+
+			Tween(restoreBtn, MediumTween, { Position = restorePos })
 			Tween(Main, MediumTween, { Size = UDim2.new(0, targetWidth, 0, TopBarHeight) })
+			-- Compact tetap rectangular (radius 16 masih proporsional buat
+			-- lebar ~200px), Micro dibikin lingkaran penuh (radius = setengah lebar).
+			Tween(MainCorner, MediumTween, {
+				CornerRadius = (target == "micro") and UDim.new(0, MicroWidth / 2) or UDim.new(0, 16),
+			})
 
 			task.delay(0.2, function()
 				if windowState == target then
@@ -1221,6 +1270,61 @@ function EWEHUB:CreateWindow(config)
 		Window:Destroy()
 	end)
 
+	-- Render 1 banner catatan (dari string atau array {Title=,Content=})
+	-- ke dalam sebuah Page. Dipasang sebagai anak PERTAMA Page itu, jadi
+	-- otomatis nampil pinned di paling atas tanpa perlu LayoutOrder trick.
+	local function BuildNotesBanner(page, notesData)
+		local sections = {}
+		if type(notesData) == "string" and notesData ~= "" then
+			sections = { { Content = notesData } }
+		elseif type(notesData) == "table" then
+			sections = notesData
+		end
+
+		for _, section in ipairs(sections) do
+			local Card = New("Frame", {
+				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+				BackgroundColor3 = Theme.Panel, Parent = page,
+			}, { Corner(10), Stroke(Theme.Accent, 1), Padding(10, 12, 10, 12) })
+			New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = Card })
+
+			if section.Title then
+				New("TextLabel", {
+					Text = "📖 " .. section.Title, Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = Theme.Accent,
+					TextWrapped = true, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+					Parent = Card,
+				})
+			end
+
+			New("TextLabel", {
+				Text = section.Content or "",
+				Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = Theme.SubText,
+				TextWrapped = true, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+				Parent = Card,
+			})
+		end
+	end
+
+	-- Catatan GLOBAL — dipasang otomatis di paling atas SETIAP tab yang
+	-- dibuat lewat Window:CreateTab, KECUALI tab itu punya Notes sendiri
+	-- (lewat tabConfig.Notes, lihat CreateTab di bawah). Diisi dari
+	-- config.Notes saat CreateWindow, atau lewat Window:SetNotes/:AddNote
+	-- SEBELUM tab-tab dibuat (cuma mempengaruhi tab yang dibuat SETELAHNYA).
+	Window.GlobalNotes = config.Notes
+
+	function Window:SetNotes(notesData)
+		Window.GlobalNotes = notesData
+	end
+
+	function Window:AddNote(title, content)
+		if type(Window.GlobalNotes) ~= "table" then
+			Window.GlobalNotes = Window.GlobalNotes and { { Content = Window.GlobalNotes } } or {}
+		end
+		table.insert(Window.GlobalNotes, { Title = title, Content = content })
+	end
+
 	--------------------------------------------------------------
 	function Window:CreateTab(tabConfig)
 		tabConfig = type(tabConfig) == "string" and { Name = tabConfig } or tabConfig
@@ -1252,6 +1356,11 @@ function EWEHUB:CreateWindow(config)
 			Parent = ContentArea,
 		})
 		New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = Page })
+
+		-- Banner "Petunjuk" pinned di paling atas tab ini — pakai Notes
+		-- khusus tab ini (tabConfig.Notes) kalau ada, kalau enggak fallback
+		-- ke Window.GlobalNotes. Kalau dua-duanya kosong, gak nampilin apa2.
+		BuildNotesBanner(Page, tabConfig.Notes or Window.GlobalNotes)
 
 		local Tab = { Button = TabButton, Page = Page }
 		table.insert(AllPages, Tab)
@@ -1845,134 +1954,6 @@ function EWEHUB:CreateWindow(config)
 
 		Window.Tabs[tabName] = Tab
 		return Tab
-	end
-
-	--------------------------------------------------------------
-	-- TAB BAWAAN "📖 Petunjuk" — SELALU ada, pinned di paling ujung
-	-- (sebelum Konfig & Pengaturan). BEBAS DIISI developer script lewat
-	-- config.Notes saat CreateWindow, atau Window:SetNotes/:AddNote
-	-- kapan saja setelahnya. Berguna buat kasih tau cara pakai Config,
-	-- kredit, disclaimer, atau catatan apapun ke user script-nya.
-	--------------------------------------------------------------
-	local NotesPage -- forward ref, dipakai closure RenderNotes di bawah
-	do
-		local NotesButton = New("TextButton", {
-			Text = "📖  Petunjuk",
-			Font = Enum.Font.GothamMedium,
-			TextSize = 13,
-			TextColor3 = Theme.SubText,
-			BackgroundColor3 = Theme.PanelLight,
-			Size = UDim2.new(1, 0, 0, 32),
-			AutoButtonColor = false,
-			LayoutOrder = 9997, -- pinned, sebelum Konfig (9998) & Pengaturan (9999)
-			Parent = TabList,
-		}, { Corner(8) })
-
-		NotesPage = New("ScrollingFrame", {
-			Name = "Notes_Page",
-			Size = UDim2.new(1, -20, 1, -54),
-			Position = UDim2.new(0, 10, 0, 44),
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			ScrollBarThickness = 3,
-			ScrollBarImageColor3 = Theme.Accent,
-			CanvasSize = UDim2.new(0, 0, 0, 0),
-			AutomaticCanvasSize = Enum.AutomaticSize.Y,
-			Visible = false,
-			Parent = ContentArea,
-		})
-		New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = NotesPage })
-
-		NotesButton.MouseEnter:Connect(function()
-			if not NotesPage.Visible then Tween(NotesButton, FastTween, { BackgroundColor3 = Theme.Stroke }) end
-		end)
-		NotesButton.MouseLeave:Connect(function()
-			if not NotesPage.Visible then Tween(NotesButton, FastTween, { BackgroundColor3 = Theme.PanelLight }) end
-		end)
-
-		local NotesEntry = { Button = NotesButton, Page = NotesPage }
-		table.insert(AllPages, NotesEntry)
-		NotesButton.MouseButton1Click:Connect(function() SwitchTo(NotesEntry) end)
-	end
-
-	-- Render ulang isi tab Petunjuk dari data { {Title=, Content=}, ... }
-	-- atau dari string polos. Dipanggil pas init & tiap SetNotes/AddNote.
-	local function RenderNotes(notesData)
-		for _, child in ipairs(NotesPage:GetChildren()) do
-			if not child:IsA("UIListLayout") then child:Destroy() end
-		end
-
-		local sections = {}
-		if type(notesData) == "string" and notesData ~= "" then
-			sections = { { Content = notesData } }
-		elseif type(notesData) == "table" then
-			sections = notesData
-		end
-
-		if #sections == 0 then
-			New("TextLabel", {
-				Text = "Belum ada catatan dari developer script ini.",
-				Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Theme.SubText,
-				TextWrapped = true, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
-				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-				Parent = NotesPage,
-			})
-			return
-		end
-
-		for _, section in ipairs(sections) do
-			local Card = New("Frame", {
-				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-				BackgroundColor3 = Theme.Panel, Parent = NotesPage,
-			}, { Corner(10), Stroke(), Padding(10, 12, 10, 12) })
-			New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = Card })
-
-			if section.Title then
-				New("TextLabel", {
-					Text = section.Title, Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Theme.Accent,
-					TextWrapped = true, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
-					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-					Parent = Card,
-				})
-			end
-
-			New("TextLabel", {
-				Text = section.Content or "",
-				Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Theme.Text,
-				TextWrapped = true, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
-				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-				Parent = Card,
-			})
-		end
-	end
-
-	-- Isi awal dari config.Notes (string ATAU array {Title=,Content=})
-	Window.NotesData = {}
-	if config.Notes then
-		if type(config.Notes) == "string" then
-			Window.NotesData = { { Content = config.Notes } }
-		elseif type(config.Notes) == "table" then
-			Window.NotesData = config.Notes
-		end
-	end
-	RenderNotes(Window.NotesData)
-
-	-- Ganti SELURUH isi Petunjuk (string polos atau array section)
-	function Window:SetNotes(notesData)
-		if type(notesData) == "string" then
-			Window.NotesData = { { Content = notesData } }
-		elseif type(notesData) == "table" then
-			Window.NotesData = notesData
-		else
-			Window.NotesData = {}
-		end
-		RenderNotes(Window.NotesData)
-	end
-
-	-- Tambah 1 section catatan baru tanpa menghapus yang sudah ada
-	function Window:AddNote(title, content)
-		table.insert(Window.NotesData, { Title = title, Content = content })
-		RenderNotes(Window.NotesData)
 	end
 
 	--------------------------------------------------------------
