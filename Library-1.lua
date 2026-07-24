@@ -3,7 +3,21 @@
 	 EWEHUB
 	 UI Library untuk Roblox — dibuat murni dengan Luau.
 	 Dibuat oleh: Asep
-	 Versi: 4.4.0
+	 Versi: 4.5.0
+
+	 CATATAN PERUBAHAN v4.5.0:
+	 1. Top bar sekarang punya 3 tombol wajib ala title bar OS:
+	    [—] micro-minimize (collapse ke pill super kecil ~50px),
+	    [□] compact-minimize (pill ~200px, kayak minimize versi lama),
+	    [✕] close (selalu merah, makin terang pas di-hover) — menutup
+	    total window (Window:Destroy, otomatis matiin Discord/Watermark).
+	 2. BARU: tab pinned "📖 Petunjuk" — kosong/placeholder secara default,
+	    bisa diisi developer script lewat config.Notes saat CreateWindow
+	    (string biasa ATAU array {Title=, Content=}), atau kapan pun
+	    lewat Window:SetNotes(...) / Window:AddNote(judul, isi). Cocok
+	    buat jelasin cara pakai Config, kredit, atau catatan lain ke user.
+	 3. Window utama dilebarin dikit (700x320 desktop, 430x260 mobile)
+	    biar lebih lega buat 3 tombol top bar + konten.
 
 	 CATATAN PERUBAHAN v4.4.0:
 	 1. BARU: toggle "🔁 Autoload config terpilih" di tab Konfig. Kalau
@@ -97,7 +111,7 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local EWEHUB = {}
 EWEHUB.__index = EWEHUB
 
-EWEHUB.Version  = "4.4.0"
+EWEHUB.Version  = "4.5.0"
 EWEHUB.Author   = "Asep"
 EWEHUB.Windows  = {}
 EWEHUB.Flags    = {}
@@ -893,9 +907,11 @@ function EWEHUB:CreateWindow(config)
 
 	-- Layout HORIZONTAL: lebih lebar, jauh lebih pendek daripada versi lama,
 	-- supaya tidak menutupi layar pemain secara vertikal.
+	-- Dilebarin dikit dari versi sebelumnya biar lebih lega (muat 3 tombol
+	-- top bar + konten dengan nyaman).
 	local windowSize = IsMobile()
-		and UDim2.new(0, 400, 0, 250)
-		or UDim2.new(0, 640, 0, 300)
+		and UDim2.new(0, 430, 0, 260)
+		or UDim2.new(0, 700, 0, 320)
 
 	local Main = New("Frame", {
 		Name = "Main",
@@ -953,11 +969,13 @@ function EWEHUB:CreateWindow(config)
 		end
 	end)
 
+	-- Tiga tombol wajib ala title bar OS: [—] micro-minimize,
+	-- [□] compact-minimize, [✕] close (selalu merah, bukan cuma pas hover).
 	local CloseBtn = New("TextButton", {
 		Text = "✕",
 		Font = Enum.Font.GothamBold,
 		TextSize = 13,
-		TextColor3 = Theme.SubText,
+		TextColor3 = Theme.Danger,
 		BackgroundColor3 = Theme.PanelLight,
 		Size = UDim2.new(0, 28, 0, 28),
 		Position = UDim2.new(1, -37, 0.5, -14),
@@ -965,10 +983,10 @@ function EWEHUB:CreateWindow(config)
 		Parent = TopBar,
 	}, { Corner(8) })
 
-	local MinimizeBtn = New("TextButton", {
-		Text = "—",
+	local CompactBtn = New("TextButton", {
+		Text = "□",
 		Font = Enum.Font.GothamBold,
-		TextSize = 16,
+		TextSize = 14,
 		TextColor3 = Theme.SubText,
 		BackgroundColor3 = Theme.PanelLight,
 		Size = UDim2.new(0, 28, 0, 28),
@@ -977,61 +995,87 @@ function EWEHUB:CreateWindow(config)
 		Parent = TopBar,
 	}, { Corner(8) })
 
-	for _, btn in ipairs({ MinimizeBtn, CloseBtn }) do
+	local MicroBtn = New("TextButton", {
+		Text = "—",
+		Font = Enum.Font.GothamBold,
+		TextSize = 16,
+		TextColor3 = Theme.SubText,
+		BackgroundColor3 = Theme.PanelLight,
+		Size = UDim2.new(0, 28, 0, 28),
+		Position = UDim2.new(1, -103, 0.5, -14),
+		AutoButtonColor = false,
+		Parent = TopBar,
+	}, { Corner(8) })
+
+	for _, btn in ipairs({ MicroBtn, CompactBtn }) do
 		btn.MouseEnter:Connect(function() Tween(btn, FastTween, { BackgroundColor3 = Theme.AccentDark }) end)
 		btn.MouseLeave:Connect(function() Tween(btn, FastTween, { BackgroundColor3 = Theme.PanelLight }) end)
 	end
+	CloseBtn.MouseEnter:Connect(function() Tween(CloseBtn, FastTween, { BackgroundColor3 = Theme.Danger, TextColor3 = Theme.Text }) end)
+	CloseBtn.MouseLeave:Connect(function() Tween(CloseBtn, FastTween, { BackgroundColor3 = Theme.PanelLight, TextColor3 = Theme.Danger }) end)
 
 	-- Forward-declare, diisi pas TabList/ContentArea dibuat di bawah —
-	-- dipakai Minimize/Restore buat sembunyiin isi window pas di-collapse.
+	-- dipakai state machine buat sembunyiin isi window pas di-collapse.
 	local TabList, ContentArea
 
 	local TopBarHeight = 42
-	local MinimizedWidth = IsMobile() and 170 or 200
-	local isMinimized = false
+	local CompactWidth = IsMobile() and 170 or 200
+	local MicroWidth = 50
 
-	-- Model "collapse-to-bar" (ala Rayfield): window mengecil jadi pill
-	-- KECIL & COMPACT (lebar ikut mengecil, bukan cuma tingginya) di
-	-- TEMPAT YANG SAMA — bukan jadi ikon bulat terpisah (jadi gak ada
-	-- masalah "logo gak sesuai tema script"), dan lebih ringan buat hp
-	-- low-end karena cuma resize 1 frame + toggle Visible, gak perlu
-	-- bikin/drag objek baru.
-	local function Minimize()
-		isMinimized = true
-		MinimizeBtn.Text = "▾"
-		Tween(CloseBtn, FastTween, { BackgroundTransparency = 1, TextTransparency = 1 })
-		task.delay(0.12, function() if isMinimized then CloseBtn.Visible = false end end)
-		Tween(MinimizeBtn, MediumTween, { Position = UDim2.new(1, -37, 0.5, -14) })
-		Tween(Main, MediumTween, { Size = UDim2.new(0, MinimizedWidth, 0, TopBarHeight) })
-		task.delay(0.2, function()
-			if isMinimized then
-				if TabList then TabList.Visible = false end
-				if ContentArea then ContentArea.Visible = false end
-			end
-		end)
+	-- State machine 3 tingkat (ala title bar OS, lebih ringan buat hp
+	-- low-end daripada bikin objek/ScreenGui terpisah kayak versi lama):
+	--   "full"    -> window normal, semua isi kelihatan
+	--   "compact" -> pill kecil (~200px), cuma judul + 1 tombol restore
+	--   "micro"   -> pill super kecil (~50px), cuma 1 tombol restore
+	local windowState = "full"
+
+	local function SetWindowState(target)
+		if target == windowState then return end
+		windowState = target
+
+		if target == "full" then
+			Tween(CompactBtn, FastTween, { Position = UDim2.new(1, -70, 0.5, -14) })
+			Tween(MicroBtn, FastTween, { Position = UDim2.new(1, -103, 0.5, -14) })
+			MicroBtn.Visible = true
+			CompactBtn.Visible = true
+			CloseBtn.Visible = true
+			if TabList then TabList.Visible = true end
+			if ContentArea then ContentArea.Visible = true end
+			Tween(Main, SlowTween, { Size = windowSize })
+		else
+			-- Sembunyikan 2 dari 3 tombol, sisain cuma yang jadi tombol restore
+			MicroBtn.Visible = (target == "micro")
+			CompactBtn.Visible = (target == "compact")
+			CloseBtn.Visible = false
+
+			local targetWidth = (target == "compact") and CompactWidth or MicroWidth
+			local restoreBtn = (target == "compact") and CompactBtn or MicroBtn
+			Tween(restoreBtn, MediumTween, { Position = UDim2.new(1, -37, 0.5, -14) })
+			Tween(Main, MediumTween, { Size = UDim2.new(0, targetWidth, 0, TopBarHeight) })
+
+			task.delay(0.2, function()
+				if windowState == target then
+					if TabList then TabList.Visible = false end
+					if ContentArea then ContentArea.Visible = false end
+				end
+			end)
+		end
 	end
 
-	local function Restore()
-		isMinimized = false
-		MinimizeBtn.Text = "—"
-		CloseBtn.Visible = true
-		Tween(CloseBtn, FastTween, { BackgroundTransparency = 0, TextTransparency = 0 })
-		Tween(MinimizeBtn, MediumTween, { Position = UDim2.new(1, -70, 0.5, -14) })
-		if TabList then TabList.Visible = true end
-		if ContentArea then ContentArea.Visible = true end
-		Tween(Main, SlowTween, { Size = windowSize })
-	end
-
-	MinimizeBtn.MouseButton1Click:Connect(function()
-		if isMinimized then Restore() else Minimize() end
+	CompactBtn.MouseButton1Click:Connect(function()
+		SetWindowState(windowState == "compact" and "full" or "compact")
 	end)
+	MicroBtn.MouseButton1Click:Connect(function()
+		SetWindowState(windowState == "micro" and "full" or "micro")
+	end)
+
 	MakeDraggable(TopBar, Main)
 
 	-- toggle show/hide dengan keybind
 	UserInputService.InputBegan:Connect(function(input, processed)
 		if processed then return end
 		if input.KeyCode == toggleKey then
-			if isMinimized then Restore() else Minimize() end
+			SetWindowState(windowState == "full" and "compact" or "full")
 		end
 	end)
 
@@ -1801,6 +1845,134 @@ function EWEHUB:CreateWindow(config)
 
 		Window.Tabs[tabName] = Tab
 		return Tab
+	end
+
+	--------------------------------------------------------------
+	-- TAB BAWAAN "📖 Petunjuk" — SELALU ada, pinned di paling ujung
+	-- (sebelum Konfig & Pengaturan). BEBAS DIISI developer script lewat
+	-- config.Notes saat CreateWindow, atau Window:SetNotes/:AddNote
+	-- kapan saja setelahnya. Berguna buat kasih tau cara pakai Config,
+	-- kredit, disclaimer, atau catatan apapun ke user script-nya.
+	--------------------------------------------------------------
+	local NotesPage -- forward ref, dipakai closure RenderNotes di bawah
+	do
+		local NotesButton = New("TextButton", {
+			Text = "📖  Petunjuk",
+			Font = Enum.Font.GothamMedium,
+			TextSize = 13,
+			TextColor3 = Theme.SubText,
+			BackgroundColor3 = Theme.PanelLight,
+			Size = UDim2.new(1, 0, 0, 32),
+			AutoButtonColor = false,
+			LayoutOrder = 9997, -- pinned, sebelum Konfig (9998) & Pengaturan (9999)
+			Parent = TabList,
+		}, { Corner(8) })
+
+		NotesPage = New("ScrollingFrame", {
+			Name = "Notes_Page",
+			Size = UDim2.new(1, -20, 1, -54),
+			Position = UDim2.new(0, 10, 0, 44),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 3,
+			ScrollBarImageColor3 = Theme.Accent,
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			Visible = false,
+			Parent = ContentArea,
+		})
+		New("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = NotesPage })
+
+		NotesButton.MouseEnter:Connect(function()
+			if not NotesPage.Visible then Tween(NotesButton, FastTween, { BackgroundColor3 = Theme.Stroke }) end
+		end)
+		NotesButton.MouseLeave:Connect(function()
+			if not NotesPage.Visible then Tween(NotesButton, FastTween, { BackgroundColor3 = Theme.PanelLight }) end
+		end)
+
+		local NotesEntry = { Button = NotesButton, Page = NotesPage }
+		table.insert(AllPages, NotesEntry)
+		NotesButton.MouseButton1Click:Connect(function() SwitchTo(NotesEntry) end)
+	end
+
+	-- Render ulang isi tab Petunjuk dari data { {Title=, Content=}, ... }
+	-- atau dari string polos. Dipanggil pas init & tiap SetNotes/AddNote.
+	local function RenderNotes(notesData)
+		for _, child in ipairs(NotesPage:GetChildren()) do
+			if not child:IsA("UIListLayout") then child:Destroy() end
+		end
+
+		local sections = {}
+		if type(notesData) == "string" and notesData ~= "" then
+			sections = { { Content = notesData } }
+		elseif type(notesData) == "table" then
+			sections = notesData
+		end
+
+		if #sections == 0 then
+			New("TextLabel", {
+				Text = "Belum ada catatan dari developer script ini.",
+				Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Theme.SubText,
+				TextWrapped = true, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+				Parent = NotesPage,
+			})
+			return
+		end
+
+		for _, section in ipairs(sections) do
+			local Card = New("Frame", {
+				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+				BackgroundColor3 = Theme.Panel, Parent = NotesPage,
+			}, { Corner(10), Stroke(), Padding(10, 12, 10, 12) })
+			New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder, Parent = Card })
+
+			if section.Title then
+				New("TextLabel", {
+					Text = section.Title, Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Theme.Accent,
+					TextWrapped = true, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+					Parent = Card,
+				})
+			end
+
+			New("TextLabel", {
+				Text = section.Content or "",
+				Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Theme.Text,
+				TextWrapped = true, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+				Parent = Card,
+			})
+		end
+	end
+
+	-- Isi awal dari config.Notes (string ATAU array {Title=,Content=})
+	Window.NotesData = {}
+	if config.Notes then
+		if type(config.Notes) == "string" then
+			Window.NotesData = { { Content = config.Notes } }
+		elseif type(config.Notes) == "table" then
+			Window.NotesData = config.Notes
+		end
+	end
+	RenderNotes(Window.NotesData)
+
+	-- Ganti SELURUH isi Petunjuk (string polos atau array section)
+	function Window:SetNotes(notesData)
+		if type(notesData) == "string" then
+			Window.NotesData = { { Content = notesData } }
+		elseif type(notesData) == "table" then
+			Window.NotesData = notesData
+		else
+			Window.NotesData = {}
+		end
+		RenderNotes(Window.NotesData)
+	end
+
+	-- Tambah 1 section catatan baru tanpa menghapus yang sudah ada
+	function Window:AddNote(title, content)
+		table.insert(Window.NotesData, { Title = title, Content = content })
+		RenderNotes(Window.NotesData)
 	end
 
 	--------------------------------------------------------------
