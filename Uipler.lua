@@ -1,43 +1,34 @@
 --[[
 	NovaUI - Modern Roblox UI Library
 	================================================================
-	Sebuah library UI dua-panel (sidebar + content panel) dengan tema
-	dark modern, aksen merah, animasi halus (TweenService), dan
-	komponen lengkap: Button, Toggle, Slider, Dropdown (Single/Multi),
-	Textbox, ColorPicker, Keybind, Label, Section, Paragraph,
-	Notification, Dialog, Tab, Window.
+	Library UI dua-panel (sidebar/navbar + content panel) bertema dark
+	modern dengan aksen merah. Dibangun murni sebagai framework UI
+	(tidak berisi logic exploit/game apa pun) - komponen: Button,
+	Toggle, Slider, Dropdown (Single/Multi), Textbox, ColorPicker,
+	Keybind, Label, Section, Paragraph, Status, Notification, Dialog,
+	Tab, Window.
+
+	Dokumentasi lengkap: lihat DOCS.md yang menyertai file ini.
 
 	Struktur file (cari header "SECTION:" untuk navigasi cepat):
 		SECTION: SERVICES & CONSTANTS
 		SECTION: THEME
-		SECTION: UTILITIES (Create, Tween, Corner/Stroke/Shadow, Ripple, Drag, Resize)
+		SECTION: UTILITIES
 		SECTION: ICONS
-		SECTION: CONFIG (save/load, guarded utk lingkungan non-executor)
+		SECTION: CONFIG
 		SECTION: NOTIFICATION
 		SECTION: DIALOG
-		SECTION: COMPONENTS (Button, Toggle, Slider, Dropdown, Textbox,
-		                     ColorPicker, Keybind, Label, Section, Paragraph)
+		SECTION: COMPONENTS
+		SECTION: SECTION (wrapper)
 		SECTION: TAB
-		SECTION: WINDOW (sidebar, topbar, search, drag/resize/minimize)
+		SECTION: WINDOW
 		SECTION: PUBLIC API
-
-	Pemakaian dasar:
-		local NovaUI = loadstring(game:HttpGet("...NovaUI.lua"))()
-		local Window = NovaUI:CreateWindow({
-			Title = "Oxyo",
-			SubTitle = "Premium Hub",
-			Theme = "Default",
-		})
-		local Tab = Window:CreateTab({ Title = "Evade", Subtitle = "Survive Nextbots", Icon = "gamepad" })
-		local Section = Tab:CreateSection("General")
-		Section:CreateToggle({ Title = "Anti AFK", Default = false, Callback = function(v) end })
-
 	================================================================
 ]]
 
 local NovaUI = {}
 NovaUI.__index = NovaUI
-NovaUI._version = "1.0.0"
+NovaUI._version = "1.1.0"
 
 --====================================================================
 -- SECTION: SERVICES & CONSTANTS
@@ -45,10 +36,7 @@ NovaUI._version = "1.0.0"
 local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
 local HttpService      = game:GetService("HttpService")
-local TextService      = game:GetService("TextService")
-local GuiService       = game:GetService("GuiService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -57,11 +45,20 @@ local IS_MOBILE = UserInputService.TouchEnabled and not UserInputService.Keyboar
 local EASE = Enum.EasingStyle.Quint
 local EASE_OUT = Enum.EasingDirection.Out
 
+-- Pita ZIndex terpusat supaya urutan layer selalu konsisten dan tidak
+-- ada elemen yang tertutup/bertumpuk secara tidak sengaja.
+local ZLayer = {
+	Base      = 1,   -- konten normal di dalam card/section
+	Popout    = 500, -- dropdown / color picker (dirender lewat Overlay, bukan di dalam card)
+	Notify    = 800, -- notifikasi
+	Dialog    = 900, -- modal dialog
+}
+
 --====================================================================
 -- SECTION: THEME
 --====================================================================
--- Palet warna terpusat. Semua komponen membaca dari sini sehingga
--- theme baru bisa ditambahkan cukup dengan menambah entry baru.
+-- Semua warna & radius terpusat di sini. Komponen lain hanya membaca
+-- dari theme, sehingga menambah theme baru = menambah entry baru saja.
 NovaUI.Themes = {
 	Default = {
 		Background      = Color3.fromRGB(13, 13, 15),
@@ -84,6 +81,16 @@ NovaUI.Themes = {
 		Font             = Enum.Font.GothamMedium,
 		FontBold         = Enum.Font.GothamBold,
 		FontSemibold     = Enum.Font.GothamSemibold,
+
+		-- Radius terpusat: satu skala dipakai di seluruh library supaya
+		-- tidak ada sudut yang "kotak" atau tidak konsisten.
+		Radius = {
+			xs   = 6,   -- elemen kecil (icon chip, badge kecil)
+			sm   = 8,   -- input, tombol, dropdown
+			md   = 10,  -- card komponen (baris Button/Toggle/dll)
+			lg   = 16,  -- window utama
+			pill = 999, -- toggle track, status pill, badge
+		},
 	},
 }
 
@@ -92,7 +99,6 @@ NovaUI.Themes = {
 --====================================================================
 local Util = {}
 
--- Factory pembuat instance ringkas ala "declarative" -> mengurangi duplikasi
 function Util.Create(class, props, children)
 	local inst = Instance.new(class)
 	for prop, value in pairs(props or {}) do
@@ -144,42 +150,36 @@ function Util.Padding(parent, all, l, r, t, b)
 end
 
 function Util.Gradient(parent, colorSequence, rotation)
-	return Util.Create("UIGradient", {
-		Color = colorSequence,
-		Rotation = rotation or 0,
-		Parent = parent,
-	})
+	return Util.Create("UIGradient", { Color = colorSequence, Rotation = rotation or 0, Parent = parent })
 end
 
--- Shadow halus menggunakan ImageLabel 9-slice (dropshadow generik)
-function Util.Shadow(parent, transparency, size)
-	local shadow = Util.Create("ImageLabel", {
-		Name = "Shadow",
+-- Glow/dropshadow generik berbasis ImageLabel 9-slice.
+function Util.Glow(parent, color, transparency, extraSize, zindex)
+	return Util.Create("ImageLabel", {
+		Name = "Glow",
 		BackgroundTransparency = 1,
 		Image = "rbxassetid://6014261993",
-		ImageColor3 = Color3.fromRGB(0, 0, 0),
+		ImageColor3 = color or Color3.new(0, 0, 0),
 		ImageTransparency = transparency or 0.55,
 		ScaleType = Enum.ScaleType.Slice,
 		SliceCenter = Rect.new(49, 49, 450, 450),
-		Size = UDim2.new(1, size or 30, 1, size or 30),
+		Size = UDim2.new(1, extraSize or 30, 1, extraSize or 30),
 		Position = UDim2.new(0.5, 0, 0.5, 0),
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		ZIndex = 0,
+		ZIndex = zindex or 0,
 		Parent = parent,
 	})
-	return shadow
 end
 
--- Efek ripple material-design saat elemen ditekan
-function Util.Ripple(button, theme)
+-- Efek ripple material-design saat elemen ditekan.
+function Util.Ripple(button)
 	button.ClipsDescendants = true
 	button.InputBegan:Connect(function(input)
 		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
 			return
 		end
-		local pos = input.Position
-		local relX = pos.X - button.AbsolutePosition.X
-		local relY = pos.Y - button.AbsolutePosition.Y
+		local relX = input.Position.X - button.AbsolutePosition.X
+		local relY = input.Position.Y - button.AbsolutePosition.Y
 		local size = math.max(button.AbsoluteSize.X, button.AbsoluteSize.Y) * 1.6
 
 		local ripple = Util.Create("Frame", {
@@ -192,15 +192,12 @@ function Util.Ripple(button, theme)
 			Parent = button,
 		})
 		Util.Corner(ripple, 999)
-
 		Util.QuickTween(ripple, { Size = UDim2.new(0, size, 0, size), BackgroundTransparency = 1 }, 0.5, Enum.EasingStyle.Quad)
-		task.delay(0.5, function()
-			ripple:Destroy()
-		end)
+		task.delay(0.5, function() ripple:Destroy() end)
 	end)
 end
 
--- Hover generik: interpolasi warna background antara Normal <-> Hover
+-- Hover generik: interpolasi warna background antara Normal <-> Hover.
 function Util.Hover(obj, normalColor, hoverColor, duration)
 	obj.MouseEnter:Connect(function()
 		Util.QuickTween(obj, { BackgroundColor3 = hoverColor }, duration or 0.15)
@@ -210,7 +207,7 @@ function Util.Hover(obj, normalColor, hoverColor, duration)
 	end)
 end
 
--- Membuat frame draggable lewat sebuah "handle" (mis. topbar)
+-- Frame draggable lewat sebuah "handle" (mis. brand/topbar area).
 function Util.Draggify(frame, handle)
 	handle = handle or frame
 	local dragging, dragInput, startPos, startInputPos
@@ -221,19 +218,15 @@ function Util.Draggify(frame, handle)
 			startPos = frame.Position
 			startInputPos = input.Position
 			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-				end
+				if input.UserInputState == Enum.UserInputState.End then dragging = false end
 			end)
 		end
 	end)
-
 	handle.InputChanged:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
 			dragInput = input
 		end
 	end)
-
 	UserInputService.InputChanged:Connect(function(input)
 		if input == dragInput and dragging then
 			local delta = input.Position - startInputPos
@@ -245,35 +238,31 @@ function Util.Draggify(frame, handle)
 	end)
 end
 
--- Membuat frame resizable lewat handle kecil di pojok kanan-bawah
+-- Frame resizable lewat grip kecil di pojok kanan-bawah.
 function Util.Resizify(frame, minSize, maxSize)
-	minSize = minSize or Vector2.new(560, 380)
-	maxSize = maxSize or Vector2.new(1400, 900)
+	minSize = minSize or Vector2.new(640, 420)
+	maxSize = maxSize or Vector2.new(1600, 1000)
 
 	local grip = Util.Create("Frame", {
 		Name = "ResizeGrip",
-		Size = UDim2.new(0, 18, 0, 18),
-		Position = UDim2.new(1, -18, 1, -18),
 		BackgroundTransparency = 1,
+		Size = UDim2.new(0, 20, 0, 20),
+		Position = UDim2.new(1, -20, 1, -20),
 		ZIndex = 20,
 		Parent = frame,
 	})
 
 	local resizing, startSize, startInputPos
-
 	grip.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			resizing = true
 			startSize = frame.Size
 			startInputPos = input.Position
 			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					resizing = false
-				end
+				if input.UserInputState == Enum.UserInputState.End then resizing = false end
 			end)
 		end
 	end)
-
 	UserInputService.InputChanged:Connect(function(input)
 		if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			local delta = input.Position - startInputPos
@@ -286,30 +275,104 @@ function Util.Resizify(frame, minSize, maxSize)
 	return grip
 end
 
+-- Badge pill status (dipakai oleh header Window & komponen Status di Section)
+-- supaya tampilannya selalu konsisten di manapun dipakai.
+function Util.MakeStatusPill(parent, theme, text, color)
+	local pill = Util.Create("Frame", {
+		BackgroundColor3 = color,
+		BackgroundTransparency = 0.85,
+		Size = UDim2.new(0, 0, 0, 22),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Parent = parent,
+	})
+	Util.Corner(pill, theme.Radius.pill)
+	local stroke = Util.Stroke(pill, color, 1, 0.5)
+	Util.Padding(pill, 0, 10, 10, 0, 0)
+
+	local dot = Util.Create("Frame", {
+		BackgroundColor3 = color,
+		Size = UDim2.new(0, 7, 0, 7),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		AnchorPoint = Vector2.new(0, 0.5),
+		ZIndex = 2,
+		Parent = pill,
+	})
+	Util.Corner(dot, theme.Radius.pill)
+	local dotGlow = Util.Glow(dot, color, 0.4, -8, 1)
+
+	local label = Util.Create("TextLabel", {
+		BackgroundTransparency = 1,
+		Text = text,
+		Font = theme.FontSemibold,
+		TextSize = 11,
+		TextColor3 = color,
+		Size = UDim2.new(0, 0, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Position = UDim2.new(0, 13, 0, 0),
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Parent = pill,
+	})
+
+	-- Denyut lembut pada dot supaya status terasa "live", bukan statis.
+	local alive = true
+	task.spawn(function()
+		while alive and dot.Parent do
+			Util.QuickTween(dotGlow, { ImageTransparency = 0.75 }, 0.9)
+			task.wait(0.9)
+			if not (alive and dot.Parent) then break end
+			Util.QuickTween(dotGlow, { ImageTransparency = 0.35 }, 0.9)
+			task.wait(0.9)
+		end
+	end)
+
+	local api = { Instance = pill }
+	function api:Set(newText, newColor)
+		label.Text = newText
+		label.TextColor3 = newColor
+		pill.BackgroundColor3 = newColor
+		stroke.Color = newColor
+		dot.BackgroundColor3 = newColor
+		dotGlow.ImageColor3 = newColor
+	end
+	function api:Destroy()
+		alive = false
+		pill:Destroy()
+	end
+
+	return api
+end
+
+-- Peta State -> warna theme, dipakai komponen Status supaya developer
+-- cukup bilang "positive"/"warning"/"negative"/"neutral".
+function Util.StatusColor(theme, state)
+	local map = {
+		positive = theme.Success,
+		warning = theme.Warning,
+		negative = theme.Error,
+		neutral = theme.TextTertiary,
+	}
+	return map[state] or theme.Success
+end
+
 NovaUI._Util = Util
+NovaUI._ZLayer = ZLayer
 
 --====================================================================
 -- SECTION: ICONS
--- Table nama -> asset id. Bisa ditambah bebas. Jika nama tidak ada,
--- fallback ke bullet sederhana sehingga library tidak pernah error.
+-- Table nama -> asset id. Tambahkan bebas. Nama tak dikenal -> fallback.
 --====================================================================
 NovaUI.Icons = {
 	home        = "rbxassetid://10723347404",
 	gamepad     = "rbxassetid://10734950309",
 	settings    = "rbxassetid://10734943902",
 	search      = "rbxassetid://10734950309",
-	close       = "rbxassetid://10747384394",
-	minimize    = "rbxassetid://10747371002",
 	dice        = "rbxassetid://10723407163",
 	shield      = "rbxassetid://10723407923",
 	bolt        = "rbxassetid://10723406145",
-	chevronDown = "rbxassetid://10709790771",
 	check       = "rbxassetid://10709790644",
-	discord     = "rbxassetid://10723407510",
 	user        = "rbxassetid://10723365040",
 	info        = "rbxassetid://10734950404",
 	warning     = "rbxassetid://10734949905",
-	x           = "rbxassetid://10747384394",
 }
 
 function NovaUI:GetIcon(name)
@@ -318,10 +381,8 @@ end
 
 --====================================================================
 -- SECTION: CONFIG
--- Penyimpanan konfigurasi memakai writefile/readfile/isfile jika
--- tersedia di lingkungan eksekusi (dijaga dengan pcall), dengan
--- fallback ke penyimpanan dalam-memori supaya library tetap berjalan
--- normal di lingkungan tanpa akses filesystem (mis. Roblox Studio).
+-- writefile/readfile/isfile dijaga pcall; fallback in-memory apabila
+-- tidak tersedia (mis. Roblox Studio) supaya library tetap berjalan.
 --====================================================================
 local Config = {}
 Config.__index = Config
@@ -331,32 +392,26 @@ local function fsAvailable()
 end
 
 function Config.new(name)
-	local self = setmetatable({}, Config)
-	self.Name = name or "NovaUI_Config"
+	local self = setmetatable({ Name = name or "NovaUI_Config", Store = {} }, Config)
 	self.Path = self.Name .. ".json"
-	self.Store = {}
 	self:Load()
 	return self
 end
 
 function Config:Load()
-	if fsAvailable() then
-		local ok, result = pcall(function()
-			if isfile(self.Path) then
-				return HttpService:JSONDecode(readfile(self.Path))
-			end
-			return {}
-		end)
-		self.Store = ok and result or {}
-	end
+	if not fsAvailable() then return end
+	local ok, result = pcall(function()
+		if isfile(self.Path) then
+			return HttpService:JSONDecode(readfile(self.Path))
+		end
+		return {}
+	end)
+	self.Store = ok and result or {}
 end
 
 function Config:Save()
-	if fsAvailable() then
-		pcall(function()
-			writefile(self.Path, HttpService:JSONEncode(self.Store))
-		end)
-	end
+	if not fsAvailable() then return end
+	pcall(function() writefile(self.Path, HttpService:JSONEncode(self.Store)) end)
 end
 
 function Config:Set(key, value)
@@ -365,9 +420,7 @@ function Config:Set(key, value)
 end
 
 function Config:Get(key, default)
-	if self.Store[key] == nil then
-		return default
-	end
+	if self.Store[key] == nil then return default end
 	return self.Store[key]
 end
 
@@ -380,13 +433,13 @@ local Notification = {}
 Notification.__index = Notification
 
 function Notification.new(gui, theme)
-	local self = setmetatable({}, Notification)
-	self.Theme = theme
+	local self = setmetatable({ Theme = theme }, Notification)
 	self.Container = Util.Create("Frame", {
 		Name = "NotificationContainer",
 		BackgroundTransparency = 1,
 		Size = UDim2.new(0, 320, 1, -40),
 		Position = UDim2.new(1, -340, 0, 20),
+		ZIndex = ZLayer.Notify,
 		Parent = gui,
 	})
 	Util.Create("UIListLayout", {
@@ -399,17 +452,13 @@ function Notification.new(gui, theme)
 	return self
 end
 
--- Types: "Info", "Success", "Warning", "Error"
+-- opts.Type: "Info" | "Success" | "Warning" | "Error"
 function Notification:Push(opts)
 	opts = opts or {}
 	local theme = self.Theme
-	local accentByType = {
-		Info = theme.Accent,
-		Success = theme.Success,
-		Warning = theme.Warning,
-		Error = theme.Error,
-	}
-	local accent = accentByType[opts.Type] or theme.Accent
+	local accent = ({
+		Info = theme.Accent, Success = theme.Success, Warning = theme.Warning, Error = theme.Error,
+	})[opts.Type] or theme.Accent
 
 	local card = Util.Create("Frame", {
 		BackgroundColor3 = theme.PanelSecondary,
@@ -417,18 +466,20 @@ function Notification:Push(opts)
 		AutomaticSize = Enum.AutomaticSize.Y,
 		Position = UDim2.new(1, 40, 0, 0),
 		ClipsDescendants = true,
+		ZIndex = ZLayer.Notify,
 	})
-	Util.Corner(card, 12)
+	Util.Corner(card, theme.Radius.md)
 	Util.Stroke(card, theme.Stroke, 1)
 	Util.Padding(card, 14)
 
-	Util.Create("Frame", {
+	local accentBar = Util.Create("Frame", {
 		BackgroundColor3 = accent,
 		Size = UDim2.new(0, 3, 1, -8),
 		Position = UDim2.new(0, 0, 0, 4),
+		ZIndex = ZLayer.Notify + 1,
 		Parent = card,
-	}, {}).Parent = card
-	Util.Corner(card:FindFirstChildOfClass("Frame"), 4)
+	})
+	Util.Corner(accentBar, theme.Radius.xs)
 
 	local title = Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
@@ -441,8 +492,7 @@ function Notification:Push(opts)
 		Position = UDim2.new(0, 12, 0, 0),
 		Parent = card,
 	})
-
-	local desc = Util.Create("TextLabel", {
+	Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
 		Text = opts.Content or "",
 		Font = theme.Font,
@@ -458,23 +508,15 @@ function Notification:Push(opts)
 	})
 
 	card.Parent = self.Container
-	card.Size = UDim2.new(1, 0, 0, 0)
-
-	-- Slide-in + fade
 	card.BackgroundTransparency = 1
 	title.TextTransparency = 1
-	desc.TextTransparency = 1
 	Util.QuickTween(card, { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0 }, 0.35)
 	Util.QuickTween(title, { TextTransparency = 0 }, 0.35)
-	Util.QuickTween(desc, { TextTransparency = 0 }, 0.35)
 
-	local duration = opts.Duration or 4.5
-	task.delay(duration, function()
+	task.delay(opts.Duration or 4.5, function()
 		if card and card.Parent then
 			Util.QuickTween(card, { Position = UDim2.new(1, 40, 0, 0) }, 0.3)
-			task.delay(0.3, function()
-				if card then card:Destroy() end
-			end)
+			task.delay(0.3, function() if card then card:Destroy() end end)
 		end
 	end)
 
@@ -490,10 +532,7 @@ local Dialog = {}
 Dialog.__index = Dialog
 
 function Dialog.new(gui, theme)
-	local self = setmetatable({}, Dialog)
-	self.Theme = theme
-	self.Gui = gui
-	return self
+	return setmetatable({ Theme = theme, Gui = gui }, Dialog)
 end
 
 function Dialog:Open(opts)
@@ -505,29 +544,24 @@ function Dialog:Open(opts)
 		BackgroundColor3 = Color3.new(0, 0, 0),
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 1, 0),
-		ZIndex = 100,
+		ZIndex = ZLayer.Dialog,
 		Parent = self.Gui,
 	})
 
 	local box = Util.Create("Frame", {
 		BackgroundColor3 = theme.PanelSecondary,
-		Size = UDim2.new(0, 360, 0, 0),
+		Size = UDim2.new(0, 320, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		Position = UDim2.new(0.5, 0, 0.5, 0),
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		ZIndex = 101,
+		ZIndex = ZLayer.Dialog + 1,
 		Parent = backdrop,
 	})
-	Util.Corner(box, 14)
+	Util.Corner(box, theme.Radius.md)
 	Util.Stroke(box, theme.Stroke, 1)
-	Util.Shadow(box, 0.5, 60)
+	Util.Glow(box, Color3.new(0, 0, 0), 0.5, 60)
 	Util.Padding(box, 20)
-
-	local layout = Util.Create("UIListLayout", {
-		Padding = UDim.new(0, 12),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = box,
-	})
+	Util.Create("UIListLayout", { Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder, Parent = box })
 
 	Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
@@ -540,7 +574,6 @@ function Dialog:Open(opts)
 		LayoutOrder = 1,
 		Parent = box,
 	})
-
 	Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
 		Text = opts.Content or "",
@@ -555,12 +588,7 @@ function Dialog:Open(opts)
 		Parent = box,
 	})
 
-	local btnRow = Util.Create("Frame", {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 36),
-		LayoutOrder = 3,
-		Parent = box,
-	})
+	local btnRow = Util.Create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 36), LayoutOrder = 3, Parent = box })
 	Util.Create("UIListLayout", {
 		FillDirection = Enum.FillDirection.Horizontal,
 		HorizontalAlignment = Enum.HorizontalAlignment.Right,
@@ -570,11 +598,10 @@ function Dialog:Open(opts)
 
 	local function closeDialog()
 		Util.QuickTween(backdrop, { BackgroundTransparency = 1 }, 0.2)
-		Util.QuickTween(box, { Size = UDim2.new(0, 340, 0, box.AbsoluteSize.Y) }, 0.2)
 		task.delay(0.2, function() backdrop:Destroy() end)
 	end
 
-	for i, btnOpt in ipairs(opts.Buttons or { { Text = "OK", Callback = function() end } }) do
+	for _, btnOpt in ipairs(opts.Buttons or { { Text = "OK" } }) do
 		local isAccent = btnOpt.Accent
 		local btn = Util.Create("TextButton", {
 			BackgroundColor3 = isAccent and theme.Accent or theme.PanelTertiary,
@@ -582,12 +609,12 @@ function Dialog:Open(opts)
 			Text = btnOpt.Text or "OK",
 			Font = theme.FontSemibold,
 			TextSize = 14,
-			TextColor3 = isAccent and Color3.new(1,1,1) or theme.TextPrimary,
+			TextColor3 = isAccent and Color3.new(1, 1, 1) or theme.TextPrimary,
 			AutoButtonColor = false,
 			Parent = btnRow,
 		})
-		Util.Corner(btn, 8)
-		Util.Ripple(btn, theme)
+		Util.Corner(btn, theme.Radius.sm)
+		Util.Ripple(btn)
 		Util.Hover(btn, btn.BackgroundColor3, isAccent and theme.AccentHover or theme.PanelHover)
 		btn.MouseButton1Click:Connect(function()
 			if btnOpt.Callback then btnOpt.Callback() end
@@ -596,9 +623,9 @@ function Dialog:Open(opts)
 	end
 
 	backdrop.BackgroundTransparency = 1
-	box.Size = UDim2.new(0, 320, 0, 0)
 	Util.QuickTween(backdrop, { BackgroundTransparency = 0.45 }, 0.25)
-	Util.QuickTween(box, { Size = UDim2.new(0, 360, 0, box.AbsoluteSize.Y) }, 0.25, Enum.EasingStyle.Back)
+	box.Size = UDim2.new(0, 300, 0, box.AbsoluteSize.Y)
+	Util.QuickTween(box, { Size = UDim2.new(0, 320, 0, box.AbsoluteSize.Y) }, 0.25, Enum.EasingStyle.Back)
 
 	return backdrop
 end
@@ -607,47 +634,37 @@ NovaUI._Dialog = Dialog
 
 --====================================================================
 -- SECTION: COMPONENTS
--- Setiap komponen adalah fungsi factory yang menerima (parent, theme, opts)
--- dan mengembalikan sebuah object dengan API :Set()/:Get() bila relevan.
--- Semua komponen berbagi "shell" (card container) yang seragam lewat
--- Components.BaseCard supaya tampilan konsisten & kode tidak berduplikasi.
+-- Setiap komponen adalah fungsi factory (parent, theme, opts, window)
+-- yang mengembalikan sebuah object dengan API :Set()/:Get() bila
+-- relevan. `window` opsional - hanya dibutuhkan oleh komponen yang
+-- membuka popout (Dropdown, ColorPicker) supaya bisa dirender lewat
+-- Overlay Window (lapisan teratas, tidak ter-clip oleh ScrollingFrame).
 --====================================================================
 local Components = {}
 
--- Card dasar dipakai semua komponen baris-tunggal (Button/Toggle/Slider/dst)
+-- Card dasar dipakai semua komponen baris-tunggal (Button/Toggle/Slider/dll)
+-- supaya tinggi, padding, radius, dan efek hover selalu konsisten.
 function Components.BaseCard(parent, theme, title, subtitle, height)
 	local card = Util.Create("Frame", {
 		BackgroundColor3 = theme.PanelSecondary,
-		Size = UDim2.new(1, 0, 0, height or 52),
+		Size = UDim2.new(1, 0, 0, height or 54),
+		ZIndex = ZLayer.Base,
 		Parent = parent,
 	})
-	Util.Corner(card, 10)
+	Util.Corner(card, theme.Radius.md)
 	local stroke = Util.Stroke(card, theme.Stroke, 1)
 
-	-- Highlight tipis di sisi atas (kesan "glass") supaya card tidak flat
-	local highlight = Util.Create("Frame", {
-		BackgroundColor3 = Color3.new(1, 1, 1),
-		BackgroundTransparency = 0.94,
-		Size = UDim2.new(1, 0, 0, 1),
-		Parent = card,
-	})
-	Util.Corner(highlight, 10)
-
-	-- Hover: border menyala aksen + background sedikit terang, terasa hidup saat dipakai
 	Util.Hover(card, theme.PanelSecondary, theme.PanelHover)
-	card.MouseEnter:Connect(function()
-		Util.QuickTween(stroke, { Color = theme.Accent, Transparency = 0.55 }, 0.18)
-	end)
-	card.MouseLeave:Connect(function()
-		Util.QuickTween(stroke, { Color = theme.Stroke, Transparency = 0 }, 0.18)
-	end)
+	card.MouseEnter:Connect(function() Util.QuickTween(stroke, { Color = theme.Accent, Transparency = 0.55 }, 0.18) end)
+	card.MouseLeave:Connect(function() Util.QuickTween(stroke, { Color = theme.Stroke, Transparency = 0 }, 0.18) end)
 
 	local textHolder = Util.Create("Frame", {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(0.55, 0, 1, 0),
-		Position = UDim2.new(0, 14, 0, 0),
+		Size = UDim2.new(0.52, 0, 1, 0),
+		Position = UDim2.new(0, 16, 0, 0),
 		Parent = card,
 	})
+	Util.Create("UIListLayout", { VerticalAlignment = Enum.VerticalAlignment.Center, Parent = textHolder })
 
 	local titleLabel = Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
@@ -656,8 +673,8 @@ function Components.BaseCard(parent, theme, title, subtitle, height)
 		TextSize = 14,
 		TextColor3 = theme.TextPrimary,
 		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
 		Size = UDim2.new(1, 0, subtitle and 0.5 or 1, 0),
-		Position = UDim2.new(0, 0, 0, 0),
 		Parent = textHolder,
 	})
 
@@ -670,17 +687,11 @@ function Components.BaseCard(parent, theme, title, subtitle, height)
 			TextSize = 12,
 			TextColor3 = theme.TextTertiary,
 			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
 			Size = UDim2.new(1, 0, 0.5, 0),
-			Position = UDim2.new(0, 0, 0.5, 0),
 			Parent = textHolder,
 		})
 	end
-
-	Util.Create("UIListLayout", {
-		FillDirection = Enum.FillDirection.Vertical,
-		VerticalAlignment = Enum.VerticalAlignment.Center,
-		Parent = textHolder,
-	})
 
 	return card, titleLabel, subLabel
 end
@@ -690,37 +701,34 @@ end
 -- ---------------------------------------------------------------
 function Components.CreateButton(parent, theme, opts)
 	opts = opts or {}
-	local card = Components.BaseCard(parent, theme, opts.Title, opts.Description, 52)
+	local card = Components.BaseCard(parent, theme, opts.Title, opts.Description, 54)
 
 	local action = Util.Create("TextButton", {
 		BackgroundColor3 = theme.Accent,
-		Size = UDim2.new(0, 110, 0, 32),
-		Position = UDim2.new(1, -124, 0.5, 0),
-		AnchorPoint = Vector2.new(0, 0.5),
+		Size = UDim2.new(0, 116, 0, 34),
+		Position = UDim2.new(1, -16, 0.5, 0),
+		AnchorPoint = Vector2.new(1, 0.5),
 		Text = opts.ButtonText or "Execute",
-		Font = theme.FontSemibold,
+		Font = theme.FontBold,
 		TextSize = 13,
 		TextColor3 = Color3.new(1, 1, 1),
+		TextStrokeTransparency = 0.85,
 		AutoButtonColor = false,
+		ZIndex = ZLayer.Base + 1,
 		Parent = card,
 	})
-	Util.Corner(action, 8)
+	Util.Corner(action, theme.Radius.sm)
 	Util.Gradient(action, ColorSequence.new(theme.AccentGradient, theme.Accent), 90)
-	Util.Ripple(action, theme)
+	Util.Ripple(action)
 
 	action.MouseEnter:Connect(function()
 		Util.QuickTween(action, { BackgroundColor3 = theme.AccentHover }, 0.15)
-		Util.QuickTween(action, { Size = UDim2.new(0, 114, 0, 33) }, 0.15)
 	end)
 	action.MouseLeave:Connect(function()
 		Util.QuickTween(action, { BackgroundColor3 = theme.Accent }, 0.15)
-		Util.QuickTween(action, { Size = UDim2.new(0, 110, 0, 32) }, 0.15)
 	end)
-
 	action.MouseButton1Click:Connect(function()
-		if opts.Callback then
-			task.spawn(opts.Callback)
-		end
+		if opts.Callback then task.spawn(opts.Callback) end
 	end)
 
 	return { Instance = card, SetText = function(_, t) action.Text = t end }
@@ -731,17 +739,18 @@ end
 -- ---------------------------------------------------------------
 function Components.CreateToggle(parent, theme, opts)
 	opts = opts or {}
-	local card = Components.BaseCard(parent, theme, opts.Title, opts.Description, 52)
+	local card = Components.BaseCard(parent, theme, opts.Title, opts.Description, 54)
 	local state = opts.Default or false
 
 	local track = Util.Create("Frame", {
 		BackgroundColor3 = state and theme.Accent or theme.PanelTertiary,
 		Size = UDim2.new(0, 44, 0, 24),
-		Position = UDim2.new(1, -58, 0.5, 0),
-		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(1, -16, 0.5, 0),
+		AnchorPoint = Vector2.new(1, 0.5),
+		ZIndex = ZLayer.Base + 1,
 		Parent = card,
 	})
-	Util.Corner(track, 999)
+	Util.Corner(track, theme.Radius.pill)
 	Util.Stroke(track, theme.Stroke, 1)
 
 	local knob = Util.Create("Frame", {
@@ -749,19 +758,14 @@ function Components.CreateToggle(parent, theme, opts)
 		Size = UDim2.new(0, 18, 0, 18),
 		Position = state and UDim2.new(1, -21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
 		AnchorPoint = Vector2.new(0, 0.5),
+		ZIndex = ZLayer.Base + 2,
 		Parent = track,
 	})
-	Util.Corner(knob, 999)
+	Util.Corner(knob, theme.Radius.pill)
 
-	local hitbox = Util.Create("TextButton", {
-		BackgroundTransparency = 1,
-		Text = "",
-		Size = UDim2.new(1, 0, 1, 0),
-		Parent = track,
-	})
+	local hitbox = Util.Create("TextButton", { BackgroundTransparency = 1, Text = "", Size = UDim2.new(1, 0, 1, 0), Parent = track })
 
-	local self = { Value = state }
-
+	local self = { Value = state, Instance = card }
 	local function render(animate)
 		local dur = animate and 0.2 or 0
 		Util.QuickTween(track, { BackgroundColor3 = self.Value and theme.Accent or theme.PanelTertiary }, dur)
@@ -779,7 +783,6 @@ function Components.CreateToggle(parent, theme, opts)
 		render(true)
 	end
 
-	self.Instance = card
 	return self
 end
 
@@ -792,7 +795,7 @@ function Components.CreateSlider(parent, theme, opts)
 	local increment = opts.Increment or 1
 	local value = math.clamp(opts.Default or min, min, max)
 
-	local card = Components.BaseCard(parent, theme, opts.Title, nil, 58)
+	local card = Components.BaseCard(parent, theme, opts.Title, nil, 60)
 
 	local valueLabel = Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
@@ -800,45 +803,40 @@ function Components.CreateSlider(parent, theme, opts)
 		Font = theme.FontSemibold,
 		TextSize = 13,
 		TextColor3 = theme.Accent,
-		Size = UDim2.new(0, 60, 0, 18),
-		Position = UDim2.new(1, -74, 0, 8),
+		Size = UDim2.new(0, 70, 0, 18),
+		Position = UDim2.new(1, -16, 0, 10),
+		AnchorPoint = Vector2.new(1, 0),
 		TextXAlignment = Enum.TextXAlignment.Right,
 		Parent = card,
 	})
 
 	local barBack = Util.Create("Frame", {
 		BackgroundColor3 = theme.PanelTertiary,
-		Size = UDim2.new(1, -28, 0, 6),
-		Position = UDim2.new(0, 14, 1, -16),
+		Size = UDim2.new(1, -32, 0, 6),
+		Position = UDim2.new(0, 16, 1, -18),
 		Parent = card,
 	})
-	Util.Corner(barBack, 999)
+	Util.Corner(barBack, theme.Radius.pill)
 
 	local ratio = (value - min) / math.max(max - min, 1e-6)
-	local barFill = Util.Create("Frame", {
-		BackgroundColor3 = theme.Accent,
-		Size = UDim2.new(ratio, 0, 1, 0),
-		Parent = barBack,
-	})
-	Util.Corner(barFill, 999)
+	local barFill = Util.Create("Frame", { BackgroundColor3 = theme.Accent, Size = UDim2.new(ratio, 0, 1, 0), Parent = barBack })
+	Util.Corner(barFill, theme.Radius.pill)
 
 	local knob = Util.Create("Frame", {
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		Size = UDim2.new(0, 14, 0, 14),
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.new(ratio, 0, 0.5, 0),
+		ZIndex = ZLayer.Base + 1,
 		Parent = barBack,
 	})
-	Util.Corner(knob, 999)
+	Util.Corner(knob, theme.Radius.pill)
 	Util.Stroke(knob, theme.Accent, 2)
 
-	local self = { Value = value }
-
+	local self = { Value = value, Instance = card }
 	local function setFromRatio(r, fire)
 		r = math.clamp(r, 0, 1)
-		local raw = min + (max - min) * r
-		local stepped = math.floor(raw / increment + 0.5) * increment
-		stepped = math.clamp(stepped, min, max)
+		local stepped = math.clamp(math.floor((min + (max - min) * r) / increment + 0.5) * increment, min, max)
 		self.Value = stepped
 		local newRatio = (stepped - min) / math.max(max - min, 1e-6)
 		Util.QuickTween(barFill, { Size = UDim2.new(newRatio, 0, 1, 0) }, 0.05)
@@ -851,23 +849,20 @@ function Components.CreateSlider(parent, theme, opts)
 	local hitbox = Util.Create("TextButton", {
 		BackgroundTransparency = 1,
 		Text = "",
-		Size = UDim2.new(1, 20, 0, 20),
+		Size = UDim2.new(1, 20, 0, 24),
 		Position = UDim2.new(0, -10, 0.5, 0),
 		AnchorPoint = Vector2.new(0, 0.5),
 		Parent = barBack,
 	})
-
 	hitbox.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
-			local r = (input.Position.X - barBack.AbsolutePosition.X) / barBack.AbsoluteSize.X
-			setFromRatio(r, true)
+			setFromRatio((input.Position.X - barBack.AbsolutePosition.X) / barBack.AbsoluteSize.X, true)
 		end
 	end)
 	UserInputService.InputChanged:Connect(function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-			local r = (input.Position.X - barBack.AbsolutePosition.X) / barBack.AbsoluteSize.X
-			setFromRatio(r, true)
+			setFromRatio((input.Position.X - barBack.AbsolutePosition.X) / barBack.AbsoluteSize.X, true)
 		end
 	end)
 	UserInputService.InputEnded:Connect(function(input)
@@ -876,31 +871,51 @@ function Components.CreateSlider(parent, theme, opts)
 		end
 	end)
 
-	function self:Set(v)
-		setFromRatio((v - min) / math.max(max - min, 1e-6), false)
-	end
-
-	self.Instance = card
+	function self:Set(v) setFromRatio((v - min) / math.max(max - min, 1e-6), false) end
 	return self
+end
+
+-- ---------------------------------------------------------------
+-- Backdrop tak-terlihat dipakai Dropdown & ColorPicker: menutupi
+-- seluruh layar di Overlay, klik di luar popout akan menutupnya.
+-- ---------------------------------------------------------------
+local function createBackdropCatcher(overlay, onClose)
+	local catcher = Util.Create("TextButton", {
+		Name = "PopoutCatcher",
+		BackgroundTransparency = 1,
+		Text = "",
+		Size = UDim2.new(1, 0, 1, 0),
+		ZIndex = ZLayer.Popout,
+		Parent = overlay,
+	})
+	catcher.MouseButton1Click:Connect(function()
+		onClose()
+		catcher:Destroy()
+	end)
+	return catcher
+end
+
+-- Menghitung posisi popout (dalam koordinat layar) tepat di bawah `anchor`.
+local function popoutPositionBelow(anchor, width)
+	return UDim2.fromOffset(anchor.AbsolutePosition.X, anchor.AbsolutePosition.Y + anchor.AbsoluteSize.Y + 6),
+		width or anchor.AbsoluteSize.X
 end
 
 -- ---------------------------------------------------------------
 -- DROPDOWN (Single & Multi select)
 -- ---------------------------------------------------------------
-function Components.CreateDropdown(parent, theme, opts)
+function Components.CreateDropdown(parent, theme, opts, window)
 	opts = opts or {}
 	local options = opts.Options or {}
 	local multi = opts.Multi or false
 	local selected = {}
-
 	if multi then
 		for _, v in ipairs(opts.Default or {}) do selected[v] = true end
-	else
-		if opts.Default then selected[opts.Default] = true end
+	elseif opts.Default then
+		selected[opts.Default] = true
 	end
 
-	local card = Components.BaseCard(parent, theme, opts.Title, nil, 52)
-	card.ClipsDescendants = false
+	local card = Components.BaseCard(parent, theme, opts.Title, nil, 54)
 
 	local function currentText()
 		local list = {}
@@ -911,14 +926,15 @@ function Components.CreateDropdown(parent, theme, opts)
 
 	local display = Util.Create("TextButton", {
 		BackgroundColor3 = theme.PanelTertiary,
-		Size = UDim2.new(0, 160, 0, 32),
-		Position = UDim2.new(1, -174, 0.5, 0),
-		AnchorPoint = Vector2.new(0, 0.5),
+		Size = UDim2.new(0, 170, 0, 34),
+		Position = UDim2.new(1, -16, 0.5, 0),
+		AnchorPoint = Vector2.new(1, 0.5),
 		Text = "",
 		AutoButtonColor = false,
+		ZIndex = ZLayer.Base + 1,
 		Parent = card,
 	})
-	Util.Corner(display, 8)
+	Util.Corner(display, theme.Radius.sm)
 	Util.Stroke(display, theme.Stroke, 1)
 
 	local displayLabel = Util.Create("TextLabel", {
@@ -929,106 +945,112 @@ function Components.CreateDropdown(parent, theme, opts)
 		TextColor3 = theme.TextSecondary,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, -30, 1, 0),
-		Position = UDim2.new(0, 10, 0, 0),
+		Size = UDim2.new(1, -32, 1, 0),
+		Position = UDim2.new(0, 12, 0, 0),
 		Parent = display,
 	})
-
 	local arrow = Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
 		Text = "▾",
 		Font = theme.Font,
 		TextSize = 14,
 		TextColor3 = theme.TextSecondary,
-		Size = UDim2.new(0, 20, 1, 0),
-		Position = UDim2.new(1, -24, 0, 0),
+		Size = UDim2.new(0, 22, 1, 0),
+		Position = UDim2.new(1, -26, 0, 0),
 		Parent = display,
 	})
 
-	local listFrame = Util.Create("Frame", {
-		BackgroundColor3 = theme.PanelTertiary,
-		Size = UDim2.new(0, 160, 0, 0),
-		Position = UDim2.new(1, -174, 1, 6),
-		ClipsDescendants = true,
-		Visible = false,
-		ZIndex = 50,
-		Parent = card,
-	})
-	Util.Corner(listFrame, 8)
-	Util.Stroke(listFrame, theme.Stroke, 1)
-	local listLayout = Util.Create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Parent = listFrame })
-	Util.Padding(listFrame, 4)
+	local self = { Instance = card, Get = function() return selected end }
+	local overlay = window and window.Overlay
+	local openList, catcher
 
-	local open = false
-	local function toggleList()
-		open = not open
-		listFrame.Visible = true
-		local targetHeight = math.min(#options * 30 + 8, 180)
-		Util.QuickTween(listFrame, { Size = UDim2.new(0, 160, 0, open and targetHeight or 0) }, 0.2)
-		Util.QuickTween(arrow, { Rotation = open and 180 or 0 }, 0.2)
-		if not open then
-			task.delay(0.2, function() if not open then listFrame.Visible = false end end)
+	local function closeList()
+		if openList then
+			local l = openList
+			openList = nil
+			Util.QuickTween(arrow, { Rotation = 0 }, 0.15)
+			Util.QuickTween(l, { Size = UDim2.new(l.Size.X.Scale, l.Size.X.Offset, 0, 0) }, 0.15)
+			task.delay(0.15, function() l:Destroy() end)
 		end
+		if catcher then catcher:Destroy(); catcher = nil end
 	end
 
-	display.MouseButton1Click:Connect(toggleList)
+	local function openListFn()
+		if not overlay then return end
+		local pos, width = popoutPositionBelow(display)
+		local targetHeight = math.min(#options * 32 + 8, 200)
 
-	for i, option in ipairs(options) do
-		local optBtn = Util.Create("TextButton", {
+		catcher = createBackdropCatcher(overlay, closeList)
+
+		local listFrame = Util.Create("Frame", {
 			BackgroundColor3 = theme.PanelTertiary,
-			Size = UDim2.new(1, 0, 0, 28),
-			Text = "",
-			AutoButtonColor = false,
-			LayoutOrder = i,
-			ZIndex = 51,
-			Parent = listFrame,
+			Size = UDim2.new(0, width, 0, 0),
+			Position = pos,
+			ClipsDescendants = true,
+			ZIndex = ZLayer.Popout + 1,
+			Parent = overlay,
 		})
-		Util.Corner(optBtn, 6)
-		local optLabel = Util.Create("TextLabel", {
-			BackgroundTransparency = 1,
-			Text = tostring(option),
-			Font = theme.Font,
-			TextSize = 12,
-			TextColor3 = selected[option] and theme.Accent or theme.TextSecondary,
-			TextXAlignment = Enum.TextXAlignment.Left,
-			Size = UDim2.new(1, -16, 1, 0),
-			Position = UDim2.new(0, 8, 0, 0),
-			ZIndex = 51,
-			Parent = optBtn,
-		})
-		Util.Hover(optBtn, theme.PanelTertiary, theme.PanelHover)
+		Util.Corner(listFrame, theme.Radius.sm)
+		Util.Stroke(listFrame, theme.Stroke, 1)
+		Util.Glow(listFrame, Color3.new(0, 0, 0), 0.6, 30, ZLayer.Popout)
+		Util.Padding(listFrame, 4)
+		Util.Create("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 2), Parent = listFrame })
 
-		optBtn.MouseButton1Click:Connect(function()
-			if multi then
-				selected[option] = not selected[option]
-				optLabel.TextColor3 = selected[option] and theme.Accent or theme.TextSecondary
-			else
-				selected = { [option] = true }
-				for _, child in ipairs(listFrame:GetChildren()) do
-					if child:IsA("TextButton") then
-						child:FindFirstChildOfClass("TextLabel").TextColor3 = theme.TextSecondary
-					end
-				end
-				optLabel.TextColor3 = theme.Accent
-				toggleList()
-			end
-			displayLabel.Text = currentText()
-			if opts.Callback then
+		openList = listFrame
+		Util.QuickTween(arrow, { Rotation = 180 }, 0.15)
+		Util.QuickTween(listFrame, { Size = UDim2.new(0, width, 0, targetHeight) }, 0.18)
+
+		for i, option in ipairs(options) do
+			local optBtn = Util.Create("TextButton", {
+				BackgroundColor3 = theme.PanelTertiary,
+				Size = UDim2.new(1, 0, 0, 28),
+				Text = "",
+				AutoButtonColor = false,
+				LayoutOrder = i,
+				ZIndex = ZLayer.Popout + 2,
+				Parent = listFrame,
+			})
+			Util.Corner(optBtn, theme.Radius.xs)
+			local optLabel = Util.Create("TextLabel", {
+				BackgroundTransparency = 1,
+				Text = tostring(option),
+				Font = theme.Font,
+				TextSize = 12,
+				TextColor3 = selected[option] and theme.Accent or theme.TextSecondary,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				Size = UDim2.new(1, -16, 1, 0),
+				Position = UDim2.new(0, 8, 0, 0),
+				ZIndex = ZLayer.Popout + 2,
+				Parent = optBtn,
+			})
+			Util.Hover(optBtn, theme.PanelTertiary, theme.PanelHover)
+
+			optBtn.MouseButton1Click:Connect(function()
 				if multi then
+					selected[option] = not selected[option]
+					optLabel.TextColor3 = selected[option] and theme.Accent or theme.TextSecondary
+				else
+					selected = { [option] = true }
+					displayLabel.Text = currentText()
+					if opts.Callback then task.spawn(opts.Callback, option) end
+					closeList()
+					return
+				end
+				displayLabel.Text = currentText()
+				if opts.Callback then
 					local list = {}
 					for k, v in pairs(selected) do if v then table.insert(list, k) end end
 					task.spawn(opts.Callback, list)
-				else
-					task.spawn(opts.Callback, option)
 				end
-			end
-		end)
+			end)
+		end
 	end
 
-	return {
-		Instance = card,
-		Get = function() return selected end,
-	}
+	display.MouseButton1Click:Connect(function()
+		if openList then closeList() else openListFn() end
+	end)
+
+	return self
 end
 
 -- ---------------------------------------------------------------
@@ -1036,17 +1058,18 @@ end
 -- ---------------------------------------------------------------
 function Components.CreateTextbox(parent, theme, opts)
 	opts = opts or {}
-	local card = Components.BaseCard(parent, theme, opts.Title, nil, 52)
+	local card = Components.BaseCard(parent, theme, opts.Title, nil, 54)
 
 	local box = Util.Create("Frame", {
 		BackgroundColor3 = theme.PanelTertiary,
-		Size = UDim2.new(0, 160, 0, 32),
-		Position = UDim2.new(1, -174, 0.5, 0),
-		AnchorPoint = Vector2.new(0, 0.5),
+		Size = UDim2.new(0, 170, 0, 34),
+		Position = UDim2.new(1, -16, 0.5, 0),
+		AnchorPoint = Vector2.new(1, 0.5),
+		ZIndex = ZLayer.Base + 1,
 		Parent = card,
 	})
-	Util.Corner(box, 8)
-	Util.Stroke(box, theme.Stroke, 1)
+	Util.Corner(box, theme.Radius.sm)
+	local boxStroke = Util.Stroke(box, theme.Stroke, 1)
 
 	local input = Util.Create("TextBox", {
 		BackgroundTransparency = 1,
@@ -1062,13 +1085,9 @@ function Components.CreateTextbox(parent, theme, opts)
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Parent = box,
 	})
-
-	input.Focused:Connect(function()
-		Util.QuickTween(box, {}, 0.1)
-		Util.Stroke(box, theme.Accent, 1.5)
-	end)
-
+	input.Focused:Connect(function() Util.QuickTween(boxStroke, { Color = theme.Accent, Thickness = 1.5 }, 0.12) end)
 	input.FocusLost:Connect(function(enterPressed)
+		Util.QuickTween(boxStroke, { Color = theme.Stroke, Thickness = 1 }, 0.12)
 		if opts.Callback then task.spawn(opts.Callback, input.Text, enterPressed) end
 	end)
 
@@ -1076,142 +1095,145 @@ function Components.CreateTextbox(parent, theme, opts)
 end
 
 -- ---------------------------------------------------------------
--- COLOR PICKER (HSV sederhana: hue strip + saturation/value canvas)
+-- COLOR PICKER (HSV: hue strip + saturation/value canvas, via Overlay)
 -- ---------------------------------------------------------------
-function Components.CreateColorPicker(parent, theme, opts)
+function Components.CreateColorPicker(parent, theme, opts, window)
 	opts = opts or {}
 	local color = opts.Default or Color3.fromRGB(255, 255, 255)
-
-	local card = Components.BaseCard(parent, theme, opts.Title, nil, 52)
-	card.ClipsDescendants = false
+	local card = Components.BaseCard(parent, theme, opts.Title, nil, 54)
 
 	local swatch = Util.Create("TextButton", {
 		BackgroundColor3 = color,
-		Size = UDim2.new(0, 44, 0, 28),
-		Position = UDim2.new(1, -58, 0.5, 0),
-		AnchorPoint = Vector2.new(0, 0.5),
+		Size = UDim2.new(0, 46, 0, 30),
+		Position = UDim2.new(1, -16, 0.5, 0),
+		AnchorPoint = Vector2.new(1, 0.5),
 		Text = "",
 		AutoButtonColor = false,
+		ZIndex = ZLayer.Base + 1,
 		Parent = card,
 	})
-	Util.Corner(swatch, 6)
+	Util.Corner(swatch, theme.Radius.sm)
 	Util.Stroke(swatch, theme.Stroke, 1)
 
-	local panel = Util.Create("Frame", {
-		BackgroundColor3 = theme.PanelTertiary,
-		Size = UDim2.new(0, 200, 0, 0),
-		Position = UDim2.new(1, -244, 1, 6),
-		ClipsDescendants = true,
-		Visible = false,
-		ZIndex = 50,
-		Parent = card,
-	})
-	Util.Corner(panel, 10)
-	Util.Stroke(panel, theme.Stroke, 1)
-	Util.Padding(panel, 10)
-
-	local svCanvas = Util.Create("ImageLabel", {
-		Image = "rbxassetid://4155801252", -- generic saturation/value gradient map
-		Size = UDim2.new(1, 0, 0, 120),
-		BackgroundColor3 = color,
-		ZIndex = 51,
-		Parent = panel,
-	})
-	Util.Corner(svCanvas, 6)
-
-	local svCursor = Util.Create("Frame", {
-		BackgroundColor3 = Color3.new(1, 1, 1),
-		Size = UDim2.new(0, 10, 0, 10),
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(1, 0, 0, 0),
-		ZIndex = 52,
-		Parent = svCanvas,
-	})
-	Util.Corner(svCursor, 999)
-	Util.Stroke(svCursor, Color3.new(0,0,0), 1)
-
-	local hueBar = Util.Create("Frame", {
-		Size = UDim2.new(1, 0, 0, 16),
-		Position = UDim2.new(0, 0, 0, 130),
-		ZIndex = 51,
-		Parent = panel,
-	})
-	Util.Corner(hueBar, 999)
-	Util.Gradient(hueBar, ColorSequence.new({
-		ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 1, 1)),
-		ColorSequenceKeypoint.new(1/6, Color3.fromHSV(1/6, 1, 1)),
-		ColorSequenceKeypoint.new(2/6, Color3.fromHSV(2/6, 1, 1)),
-		ColorSequenceKeypoint.new(3/6, Color3.fromHSV(3/6, 1, 1)),
-		ColorSequenceKeypoint.new(4/6, Color3.fromHSV(4/6, 1, 1)),
-		ColorSequenceKeypoint.new(5/6, Color3.fromHSV(5/6, 1, 1)),
-		ColorSequenceKeypoint.new(1, Color3.fromHSV(1, 1, 1)),
-	}))
-
-	local hueCursor = Util.Create("Frame", {
-		BackgroundColor3 = Color3.new(1, 1, 1),
-		Size = UDim2.new(0, 4, 1, 4),
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0, 0, 0.5, 0),
-		ZIndex = 52,
-		Parent = hueBar,
-	})
-	Util.Corner(hueCursor, 2)
-
 	local h, s, v = Color3.toHSV(color)
-	local self = { Value = color }
+	local self = { Value = color, Instance = card }
+	local overlay = window and window.Overlay
+	local openPanel, catcher
 
-	local function updateColor()
-		local c = Color3.fromHSV(h, s, v)
-		self.Value = c
-		swatch.BackgroundColor3 = c
-		svCanvas.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
-		if opts.Callback then task.spawn(opts.Callback, c) end
+	local function closePanel()
+		if openPanel then
+			local p = openPanel
+			openPanel = nil
+			Util.QuickTween(p, { Size = UDim2.new(p.Size.X.Scale, p.Size.X.Offset, 0, 0) }, 0.15)
+			task.delay(0.15, function() p:Destroy() end)
+		end
+		if catcher then catcher:Destroy(); catcher = nil end
 	end
 
-	local draggingSV, draggingHue = false, false
+	local function openPanelFn()
+		if not overlay then return end
+		local pos = popoutPositionBelow(swatch, 210)
+		pos = UDim2.fromOffset(pos.X.Offset - 210 + swatch.AbsoluteSize.X, pos.Y.Offset)
 
-	svCanvas.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			draggingSV = true
-		end
-	end)
-	hueBar.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			draggingHue = true
-		end
-	end)
-	UserInputService.InputEnded:Connect(function()
-		draggingSV = false
-		draggingHue = false
-	end)
-	UserInputService.InputChanged:Connect(function(input)
-		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
-		if draggingSV then
-			local relX = math.clamp((input.Position.X - svCanvas.AbsolutePosition.X) / svCanvas.AbsoluteSize.X, 0, 1)
-			local relY = math.clamp((input.Position.Y - svCanvas.AbsolutePosition.Y) / svCanvas.AbsoluteSize.Y, 0, 1)
-			s = relX
-			v = 1 - relY
-			svCursor.Position = UDim2.new(relX, 0, relY, 0)
-			updateColor()
-		elseif draggingHue then
-			local relX = math.clamp((input.Position.X - hueBar.AbsolutePosition.X) / hueBar.AbsoluteSize.X, 0, 1)
-			h = relX
-			hueCursor.Position = UDim2.new(relX, 0, 0.5, 0)
-			updateColor()
-		end
-	end)
+		catcher = createBackdropCatcher(overlay, closePanel)
 
-	local panelOpen = false
+		local panel = Util.Create("Frame", {
+			BackgroundColor3 = theme.PanelTertiary,
+			Size = UDim2.new(0, 210, 0, 0),
+			Position = pos,
+			ClipsDescendants = true,
+			ZIndex = ZLayer.Popout + 1,
+			Parent = overlay,
+		})
+		Util.Corner(panel, theme.Radius.md)
+		Util.Stroke(panel, theme.Stroke, 1)
+		Util.Glow(panel, Color3.new(0, 0, 0), 0.6, 30, ZLayer.Popout)
+		Util.Padding(panel, 12)
+		openPanel = panel
+		Util.QuickTween(panel, { Size = UDim2.new(0, 210, 0, 168) }, 0.18)
+
+		local svCanvas = Util.Create("ImageLabel", {
+			Image = "rbxassetid://4155801252",
+			Size = UDim2.new(1, 0, 0, 120),
+			BackgroundColor3 = Color3.fromHSV(h, 1, 1),
+			ZIndex = ZLayer.Popout + 2,
+			Parent = panel,
+		})
+		Util.Corner(svCanvas, theme.Radius.xs)
+		local svCursor = Util.Create("Frame", {
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			Size = UDim2.new(0, 10, 0, 10),
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(s, 0, 1 - v, 0),
+			ZIndex = ZLayer.Popout + 3,
+			Parent = svCanvas,
+		})
+		Util.Corner(svCursor, theme.Radius.pill)
+		Util.Stroke(svCursor, Color3.new(0, 0, 0), 1)
+
+		local hueBar = Util.Create("Frame", {
+			Size = UDim2.new(1, 0, 0, 16),
+			Position = UDim2.new(0, 0, 0, 130),
+			ZIndex = ZLayer.Popout + 2,
+			Parent = panel,
+		})
+		Util.Corner(hueBar, theme.Radius.pill)
+		Util.Gradient(hueBar, ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromHSV(0, 1, 1)),
+			ColorSequenceKeypoint.new(1 / 6, Color3.fromHSV(1 / 6, 1, 1)),
+			ColorSequenceKeypoint.new(2 / 6, Color3.fromHSV(2 / 6, 1, 1)),
+			ColorSequenceKeypoint.new(3 / 6, Color3.fromHSV(3 / 6, 1, 1)),
+			ColorSequenceKeypoint.new(4 / 6, Color3.fromHSV(4 / 6, 1, 1)),
+			ColorSequenceKeypoint.new(5 / 6, Color3.fromHSV(5 / 6, 1, 1)),
+			ColorSequenceKeypoint.new(1, Color3.fromHSV(1, 1, 1)),
+		}))
+		local hueCursor = Util.Create("Frame", {
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			Size = UDim2.new(0, 4, 1, 4),
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(h, 0, 0.5, 0),
+			ZIndex = ZLayer.Popout + 3,
+			Parent = hueBar,
+		})
+		Util.Corner(hueCursor, theme.Radius.xs)
+
+		local function updateColor()
+			local c = Color3.fromHSV(h, s, v)
+			self.Value = c
+			swatch.BackgroundColor3 = c
+			svCanvas.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+			if opts.Callback then task.spawn(opts.Callback, c) end
+		end
+
+		local draggingSV, draggingHue = false, false
+		svCanvas.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then draggingSV = true end
+		end)
+		hueBar.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then draggingHue = true end
+		end)
+		UserInputService.InputEnded:Connect(function() draggingSV = false; draggingHue = false end)
+		UserInputService.InputChanged:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+			if draggingSV and svCanvas.Parent then
+				local relX = math.clamp((input.Position.X - svCanvas.AbsolutePosition.X) / svCanvas.AbsoluteSize.X, 0, 1)
+				local relY = math.clamp((input.Position.Y - svCanvas.AbsolutePosition.Y) / svCanvas.AbsoluteSize.Y, 0, 1)
+				s, v = relX, 1 - relY
+				svCursor.Position = UDim2.new(relX, 0, relY, 0)
+				updateColor()
+			elseif draggingHue and hueBar.Parent then
+				local relX = math.clamp((input.Position.X - hueBar.AbsolutePosition.X) / hueBar.AbsoluteSize.X, 0, 1)
+				h = relX
+				hueCursor.Position = UDim2.new(relX, 0, 0.5, 0)
+				updateColor()
+			end
+		end)
+	end
+
 	swatch.MouseButton1Click:Connect(function()
-		panelOpen = not panelOpen
-		panel.Visible = true
-		Util.QuickTween(panel, { Size = UDim2.new(0, 200, 0, panelOpen and 160 or 0) }, 0.22)
-		if not panelOpen then
-			task.delay(0.22, function() if not panelOpen then panel.Visible = false end end)
-		end
+		if openPanel then closePanel() else openPanelFn() end
 	end)
 
-	self.Instance = card
 	return self
 end
 
@@ -1221,44 +1243,80 @@ end
 function Components.CreateKeybind(parent, theme, opts)
 	opts = opts or {}
 	local currentKey = opts.Default or Enum.KeyCode.Unknown
-	local card = Components.BaseCard(parent, theme, opts.Title, nil, 52)
+	local card = Components.BaseCard(parent, theme, opts.Title, nil, 54)
 
 	local keyBtn = Util.Create("TextButton", {
 		BackgroundColor3 = theme.PanelTertiary,
-		Size = UDim2.new(0, 100, 0, 30),
-		Position = UDim2.new(1, -114, 0.5, 0),
-		AnchorPoint = Vector2.new(0, 0.5),
+		Size = UDim2.new(0, 100, 0, 32),
+		Position = UDim2.new(1, -16, 0.5, 0),
+		AnchorPoint = Vector2.new(1, 0.5),
 		Text = currentKey.Name ~= "Unknown" and currentKey.Name or "None",
 		Font = theme.FontSemibold,
 		TextSize = 12,
 		TextColor3 = theme.TextSecondary,
 		AutoButtonColor = false,
+		ZIndex = ZLayer.Base + 1,
 		Parent = card,
 	})
-	Util.Corner(keyBtn, 8)
-	Util.Stroke(keyBtn, theme.Stroke, 1)
+	Util.Corner(keyBtn, theme.Radius.sm)
+	local keyStroke = Util.Stroke(keyBtn, theme.Stroke, 1)
 
 	local listening = false
-	local self = { Value = currentKey }
+	local self = { Value = currentKey, Instance = card }
 
 	keyBtn.MouseButton1Click:Connect(function()
 		listening = true
 		keyBtn.Text = "..."
-		Util.Stroke(keyBtn, theme.Accent, 1.5)
+		Util.QuickTween(keyStroke, { Color = theme.Accent, Thickness = 1.5 }, 0.1)
 	end)
 
-	UserInputService.InputBegan:Connect(function(input, gpe)
+	UserInputService.InputBegan:Connect(function(input)
 		if not listening then return end
 		if input.UserInputType == Enum.UserInputType.Keyboard then
 			currentKey = input.KeyCode
 			self.Value = currentKey
 			keyBtn.Text = currentKey.Name
 			listening = false
-			Util.Stroke(keyBtn, theme.Stroke, 1)
+			Util.QuickTween(keyStroke, { Color = theme.Stroke, Thickness = 1 }, 0.1)
 			if opts.Callback then task.spawn(opts.Callback, currentKey) end
 		end
 	end)
 
+	return self
+end
+
+-- ---------------------------------------------------------------
+-- STATUS
+-- Baris status yang bisa dipakai di dalam Section mana pun (mis.
+-- "Anti-Cheat Bypass: Active", "Server: Online"). Menggunakan pill
+-- yang sama dengan status di header Window supaya tampilannya
+-- konsisten di seluruh UI.
+-- ---------------------------------------------------------------
+function Components.CreateStatus(parent, theme, opts)
+	opts = opts or {}
+	local card = Components.BaseCard(parent, theme, opts.Title, nil, 54)
+
+	local pillHolder = Util.Create("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.new(0, 140, 1, 0),
+		Position = UDim2.new(1, -16, 0.5, 0),
+		AnchorPoint = Vector2.new(1, 0.5),
+		Parent = card,
+	})
+	Util.Create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		Parent = pillHolder,
+	})
+
+	local color = Util.StatusColor(theme, opts.State or "positive")
+	local pill = Util.MakeStatusPill(pillHolder, theme, opts.Text or "Active", color)
+
+	local self = { Instance = card }
+	function self:Set(text, state)
+		pill:Set(text, Util.StatusColor(theme, state or "positive"))
+	end
 	return self
 end
 
@@ -1283,16 +1341,12 @@ function Components.CreateLabel(parent, theme, opts)
 end
 
 function Components.CreateSectionHeader(parent, theme, title)
-	local holder = Util.Create("Frame", {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 28),
-		Parent = parent,
-	})
+	local holder = Util.Create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 26), Parent = parent })
 	Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
 		Text = title or "Section",
 		Font = theme.FontBold,
-		TextSize = 13,
+		TextSize = 12,
 		TextColor3 = theme.TextTertiary,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Size = UDim2.new(1, 0, 1, 0),
@@ -1309,10 +1363,9 @@ function Components.CreateParagraph(parent, theme, opts)
 		AutomaticSize = Enum.AutomaticSize.Y,
 		Parent = parent,
 	})
-	Util.Corner(card, 10)
+	Util.Corner(card, theme.Radius.md)
 	Util.Stroke(card, theme.Stroke, 1)
-	Util.Padding(card, 14)
-
+	Util.Padding(card, 16)
 	Util.Create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = card })
 
 	Util.Create("TextLabel", {
@@ -1351,10 +1404,8 @@ NovaUI._Components = Components
 local SectionObj = {}
 SectionObj.__index = SectionObj
 
-local function newSection(parent, theme, title, registry)
-	local self = setmetatable({}, SectionObj)
-	self.Theme = theme
-	self.Registry = registry -- dipakai fitur search global
+local function newSection(parent, theme, title, window)
+	local self = setmetatable({ Theme = theme, Window = window, Registry = window.SearchRegistry }, SectionObj)
 
 	self.Holder = Util.Create("Frame", {
 		BackgroundTransparency = 1,
@@ -1362,11 +1413,7 @@ local function newSection(parent, theme, title, registry)
 		AutomaticSize = Enum.AutomaticSize.Y,
 		Parent = parent,
 	})
-	Util.Create("UIListLayout", {
-		Padding = UDim.new(0, 8),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = self.Holder,
-	})
+	Util.Create("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder, Parent = self.Holder })
 
 	if title then
 		Components.CreateSectionHeader(self.Holder, theme, title)
@@ -1400,7 +1447,7 @@ function SectionObj:CreateSlider(opts)
 end
 
 function SectionObj:CreateDropdown(opts)
-	local c = Components.CreateDropdown(self.Holder, self.Theme, opts)
+	local c = Components.CreateDropdown(self.Holder, self.Theme, opts, self.Window)
 	registerSearchable(self, opts and opts.Title, c.Instance)
 	return c
 end
@@ -1412,13 +1459,21 @@ function SectionObj:CreateTextbox(opts)
 end
 
 function SectionObj:CreateColorPicker(opts)
-	local c = Components.CreateColorPicker(self.Holder, self.Theme, opts)
+	local c = Components.CreateColorPicker(self.Holder, self.Theme, opts, self.Window)
 	registerSearchable(self, opts and opts.Title, c.Instance)
 	return c
 end
 
 function SectionObj:CreateKeybind(opts)
 	local c = Components.CreateKeybind(self.Holder, self.Theme, opts)
+	registerSearchable(self, opts and opts.Title, c.Instance)
+	return c
+end
+
+-- Status bisa dipakai di section manapun, tidak hanya di header Window.
+-- Contoh: Section:CreateStatus({ Title = "Server", Text = "Online", State = "positive" })
+function SectionObj:CreateStatus(opts)
+	local c = Components.CreateStatus(self.Holder, self.Theme, opts)
 	registerSearchable(self, opts and opts.Title, c.Instance)
 	return c
 end
@@ -1437,28 +1492,31 @@ NovaUI._Section = SectionObj
 
 --====================================================================
 -- SECTION: TAB
--- Setiap Tab merepresentasikan satu "card" di sidebar + satu halaman
--- konten di panel kanan. Window yang mengatur perpindahan antar-tab.
+-- Setiap Tab merepresentasikan satu card di navbar + satu halaman
+-- konten. Window mengatur perpindahan antar-tab (lihat Window:SelectTab).
 --====================================================================
 local TabObj = {}
 TabObj.__index = TabObj
 
 function TabObj:CreateSection(title)
-	return newSection(self.Page, self.Theme, title, self.Window.SearchRegistry)
+	return newSection(self.Page, self.Theme, title, self.Window)
 end
 
 NovaUI._Tab = TabObj
 
 --====================================================================
 -- SECTION: WINDOW
+-- Struktur: Root (tak ter-clip, menampung shadow/glow) -> Surface
+-- (ter-clip, sudut membulat, isi UI sebenarnya). Pemisahan ini
+-- mencegah shadow/glow ikut terpotong oleh sudut membulat window.
 --====================================================================
 local Window = {}
 Window.__index = Window
 
 function Window.new(opts)
 	opts = opts or {}
-	local themeName = opts.Theme or "Default"
-	local theme = NovaUI.Themes[themeName] or NovaUI.Themes.Default
+	local theme = NovaUI.Themes[opts.Theme or "Default"] or NovaUI.Themes.Default
+	local R = theme.Radius
 
 	local self = setmetatable({}, Window)
 	self.Theme = theme
@@ -1466,58 +1524,54 @@ function Window.new(opts)
 	self.SearchRegistry = {}
 	self.Config = Config.new(opts.ConfigName or (opts.Title or "NovaUI") .. "_Config")
 
-	-- Root ScreenGui
 	local gui = Util.Create("ScreenGui", {
 		Name = "NovaUI_" .. (opts.Title or "Window"),
 		ResetOnSpawn = false,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		IgnoreGuiInset = true,
 	})
-	local ok = pcall(function()
-		gui.Parent = (gethui and gethui()) or PlayerGui
-	end)
-	if not ok then gui.Parent = PlayerGui end
+	local parented = pcall(function() gui.Parent = (gethui and gethui()) or PlayerGui end)
+	if not parented then gui.Parent = PlayerGui end
 	self.Gui = gui
 
-	-- Root window frame
+	----------------------------------------------------------------
+	-- ROOT (tidak clip - wadah untuk shadow/glow + Surface) & drag target
+	----------------------------------------------------------------
+	local windowWidth = opts.Width or (IS_MOBILE and 380 or 960)
+	local windowHeight = opts.Height or (IS_MOBILE and 560 or 600)
+
 	local root = Util.Create("Frame", {
 		Name = "Root",
-		BackgroundColor3 = theme.Background,
-		Size = UDim2.new(0, opts.Width or 920, 0, opts.Height or 560),
+		BackgroundTransparency = 1,
+		Size = IS_MOBILE and UDim2.new(0.95, 0, 0.85, 0) or UDim2.new(0, windowWidth, 0, windowHeight),
 		Position = UDim2.new(0.5, 0, 0.5, 0),
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		ClipsDescendants = true,
 		Parent = gui,
 	})
-	Util.Corner(root, 14)
-	Util.Stroke(root, theme.Stroke, 1)
-	Util.Shadow(root, 0.4, 80)
 	self.Root = root
 
-	-- Glow aksen lembut di belakang window supaya tidak terasa "flat"
-	local accentGlow = Util.Create("ImageLabel", {
-		Name = "AccentGlow",
-		BackgroundTransparency = 1,
-		Image = "rbxassetid://6014261993",
-		ImageColor3 = theme.Accent,
-		ImageTransparency = 0.82,
-		ScaleType = Enum.ScaleType.Slice,
-		SliceCenter = Rect.new(49, 49, 450, 450),
-		Size = UDim2.new(1, 120, 1, 120),
-		Position = UDim2.new(0.5, 0, 0.5, 0),
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		ZIndex = -1,
+	Util.Glow(root, Color3.new(0, 0, 0), 0.45, 70, 0)
+	Util.Glow(root, theme.Accent, 0.82, 110, -1)
+
+	local surface = Util.Create("Frame", {
+		Name = "Surface",
+		BackgroundColor3 = theme.Background,
+		Size = UDim2.new(1, 0, 1, 0),
+		ClipsDescendants = true,
+		ZIndex = ZLayer.Base,
 		Parent = root,
 	})
+	Util.Corner(surface, R.lg)
+	Util.Stroke(surface, theme.Stroke, 1)
+	self.Surface = surface
 
-	-- Garis aksen tipis di bagian paling atas window (ikut ter-clip oleh sudut membulat root)
-	local topAccentLine = Util.Create("Frame", {
+	local topAccentLine = Util.Create("Frame", { -- garis aksen tipis paling atas, ikut ter-clip oleh Surface
 		Name = "TopAccentLine",
 		BackgroundColor3 = theme.Accent,
 		BorderSizePixel = 0,
 		Size = UDim2.new(1, 0, 0, 3),
-		ZIndex = 5,
-		Parent = root,
+		ZIndex = ZLayer.Base + 5,
+		Parent = surface,
 	})
 	Util.Gradient(topAccentLine, ColorSequence.new({
 		ColorSequenceKeypoint.new(0, theme.AccentDim),
@@ -1525,113 +1579,107 @@ function Window.new(opts)
 		ColorSequenceKeypoint.new(1, theme.AccentDim),
 	}))
 
-	if IS_MOBILE then
-		root.Size = UDim2.new(0.95, 0, 0.85, 0)
-	end
+	Util.Resizify(root, Vector2.new(720, 480), Vector2.new(1600, 1000))
 
-	Util.Resizify(root, Vector2.new(640, 420), Vector2.new(1500, 950))
+	-- Overlay: lapisan paling atas untuk popout (Dropdown/ColorPicker) &
+	-- backdrop klik-luar, supaya tidak pernah tertutup/terpotong oleh
+	-- ScrollingFrame manapun di dalam Surface.
+	self.Overlay = Util.Create("Frame", {
+		Name = "Overlay",
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 1, 0),
+		ZIndex = ZLayer.Popout,
+		Parent = gui,
+	})
 
-	-- Animasi entrance: fade + scale-in supaya window terasa "hidup" saat dibuka
+	-- Animasi entrance: fade + scale-in.
 	do
 		local finalSize = root.Size
 		root.Size = UDim2.new(finalSize.X.Scale, finalSize.X.Offset * 0.92, finalSize.Y.Scale, finalSize.Y.Offset * 0.92)
-		root.BackgroundTransparency = 1
-		accentGlow.ImageTransparency = 1
+		surface.BackgroundTransparency = 1
 		task.defer(function()
-			Util.QuickTween(root, { Size = finalSize, BackgroundTransparency = 0 }, 0.4, Enum.EasingStyle.Back)
-			Util.QuickTween(accentGlow, { ImageTransparency = 0.82 }, 0.5)
+			Util.QuickTween(root, { Size = finalSize }, 0.4, Enum.EasingStyle.Back)
+			Util.QuickTween(surface, { BackgroundTransparency = 0 }, 0.3)
 		end)
 	end
 
-	--------------------------------------------------------------
-	-- SIDEBAR (kiri)
-	--------------------------------------------------------------
-	local sidebarWidth = 240
+	----------------------------------------------------------------
+	-- SIDEBAR / NAVBAR (kiri)
+	----------------------------------------------------------------
+	local sidebarWidth = 270
 	local sidebar = Util.Create("Frame", {
 		Name = "Sidebar",
 		BackgroundColor3 = theme.PanelPrimary,
 		Size = UDim2.new(0, sidebarWidth, 1, 0),
-		Parent = root,
+		ZIndex = ZLayer.Base,
+		Parent = surface,
 	})
 	self.Sidebar = sidebar
 	self.SidebarWidth = sidebarWidth
 	self.SidebarCollapsed = false
 
-	-- Logo + nama app
-	local brand = Util.Create("Frame", {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 64),
-		Parent = sidebar,
-	})
+	local brand = Util.Create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 72), Parent = sidebar })
 	local logo = Util.Create("Frame", {
 		BackgroundColor3 = theme.Accent,
-		Size = UDim2.new(0, 34, 0, 34),
-		Position = UDim2.new(0, 16, 0.5, 0),
+		Size = UDim2.new(0, 38, 0, 38),
+		Position = UDim2.new(0, 18, 0.5, 0),
 		AnchorPoint = Vector2.new(0, 0.5),
 		Parent = brand,
 	})
-	Util.Corner(logo, 9)
+	Util.Corner(logo, R.sm)
 	Util.Gradient(logo, ColorSequence.new(theme.Accent, theme.AccentGradient), 45)
 	Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
 		Text = (opts.Title or "N"):sub(1, 1):upper(),
 		Font = theme.FontBold,
-		TextSize = 16,
+		TextSize = 17,
 		TextColor3 = Color3.new(1, 1, 1),
 		Size = UDim2.new(1, 0, 1, 0),
 		Parent = logo,
 	})
 
-	local brandText = Util.Create("Frame", {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, -66, 1, 0),
-		Position = UDim2.new(0, 60, 0, 0),
-		Parent = brand,
-	})
+	local brandText = Util.Create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -100, 1, 0), Position = UDim2.new(0, 66, 0, 0), Parent = brand })
+	Util.Create("UIListLayout", { VerticalAlignment = Enum.VerticalAlignment.Center, Parent = brandText })
 	Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
 		Text = opts.Title or "NovaUI",
 		Font = theme.FontBold,
-		TextSize = 15,
+		TextSize = 16,
 		TextColor3 = theme.TextPrimary,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.new(1, 0, 0, 20),
 		Parent = brandText,
 	})
 	Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
-		Text = opts.SubTitle or "Premium Hub",
+		Text = opts.SubTitle or "",
 		Font = theme.Font,
-		TextSize = 11,
-		TextColor3 = theme.Success,
+		TextSize = 12,
+		TextColor3 = theme.TextTertiary,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, 0, 0.5, 0),
-		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.new(1, 0, 0, 16),
 		Parent = brandText,
 	})
 	self.BrandFrame = brandText
 
 	Util.Draggify(root, brand)
 
-	-- Tombol collapse sidebar
 	local collapseBtn = Util.Create("TextButton", {
 		BackgroundTransparency = 1,
 		Text = "≡",
 		Font = theme.FontBold,
-		TextSize = 18,
+		TextSize = 20,
 		TextColor3 = theme.TextSecondary,
-		Size = UDim2.new(0, 28, 0, 28),
-		Position = UDim2.new(1, -34, 0.5, 0),
-		AnchorPoint = Vector2.new(0, 0.5),
+		Size = UDim2.new(0, 32, 0, 32),
+		Position = UDim2.new(1, -14, 0.5, 0),
+		AnchorPoint = Vector2.new(1, 0.5),
 		Parent = brand,
 	})
+	collapseBtn.MouseButton1Click:Connect(function() self:ToggleSidebar() end)
 
-	-- Daftar tab (card list) dengan scroll otomatis
-	local footerHeight = 56 + (opts.Discord and 44 or 0)
 	local tabList = Util.Create("ScrollingFrame", {
 		Name = "TabList",
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 1, -(72 + footerHeight)),
 		Position = UDim2.new(0, 0, 0, 72),
 		CanvasSize = UDim2.new(0, 0, 0, 0),
 		AutomaticCanvasSize = Enum.AutomaticSize.Y,
@@ -1640,19 +1688,14 @@ function Window.new(opts)
 		ScrollingDirection = Enum.ScrollingDirection.Y,
 		Parent = sidebar,
 	})
-	Util.Padding(tabList, 0, 12, 12, 0, 8)
-	Util.Create("UIListLayout", {
-		Padding = UDim.new(0, 6),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = tabList,
-	})
+	Util.Padding(tabList, 0, 14, 14, 4, 8)
+	Util.Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = tabList })
 	self.TabList = tabList
 
-	collapseBtn.MouseButton1Click:Connect(function()
-		self:ToggleSidebar()
-	end)
+	-- Footer sidebar: nama library + versi, dan discord (diisi developer lewat opts)
+	local footerHeight = 58 + (opts.Discord and 46 or 0)
+	tabList.Size = UDim2.new(1, 0, 1, -(72 + footerHeight))
 
-	-- Footer sidebar: nama library + versi, dan discord (keduanya diisi developer lewat opts)
 	local footer = Util.Create("Frame", {
 		Name = "Footer",
 		BackgroundTransparency = 1,
@@ -1660,34 +1703,24 @@ function Window.new(opts)
 		Position = UDim2.new(0, 0, 1, -footerHeight),
 		Parent = sidebar,
 	})
-	Util.Create("Frame", { -- divider tipis pemisah dari daftar tab
+	Util.Create("Frame", {
 		BackgroundColor3 = theme.Stroke,
 		BackgroundTransparency = 0.4,
-		Size = UDim2.new(1, -24, 0, 1),
-		Position = UDim2.new(0, 12, 0, 0),
+		Size = UDim2.new(1, -28, 0, 1),
+		Position = UDim2.new(0, 14, 0, 0),
 		Parent = footer,
 	})
-	Util.Create("UIListLayout", {
-		Padding = UDim.new(0, 6),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = footer,
-	})
-	Util.Padding(footer, 0, 12, 12, 10, 10)
+	Util.Create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = footer })
+	Util.Padding(footer, 0, 14, 14, 12, 12)
 
-	-- Baris 1: nama library + badge versi
-	local libRow = Util.Create("Frame", {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 20),
-		LayoutOrder = 1,
-		Parent = footer,
-	})
+	local libRow = Util.Create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 20), LayoutOrder = 1, Parent = footer })
 	Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
 		Text = opts.LibraryName or opts.Title or "NovaUI",
 		Font = theme.FontBold,
 		TextSize = 12,
 		TextColor3 = theme.TextSecondary,
-		Size = UDim2.new(1, -50, 1, 0),
+		Size = UDim2.new(1, -60, 1, 0),
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Parent = libRow,
 	})
@@ -1703,102 +1736,129 @@ function Window.new(opts)
 		AnchorPoint = Vector2.new(1, 0.5),
 		Parent = libRow,
 	})
-	Util.Corner(versionBadge, 999)
+	Util.Corner(versionBadge, R.pill)
 	Util.Padding(versionBadge, 0, 8, 8, 0, 0)
 	Util.Stroke(versionBadge, theme.Stroke, 1)
 
-	-- Baris 2 (opsional): discord, tinggal isi opts.Discord = "discord.gg/xxxx"
 	if opts.Discord then
 		local discordRow = Util.Create("TextButton", {
 			BackgroundColor3 = theme.PanelSecondary,
-			Size = UDim2.new(1, 0, 0, 34),
+			Size = UDim2.new(1, 0, 0, 36),
 			Text = "",
 			AutoButtonColor = false,
 			LayoutOrder = 2,
 			Parent = footer,
 		})
-		Util.Corner(discordRow, 8)
+		Util.Corner(discordRow, R.sm)
 		Util.Stroke(discordRow, theme.Stroke, 1)
 		Util.Hover(discordRow, theme.PanelSecondary, theme.PanelHover)
 
 		local discordIcon = Util.Create("Frame", {
-			BackgroundColor3 = Color3.fromRGB(88, 101, 242), -- warna khas Discord
-			Size = UDim2.new(0, 22, 0, 22),
+			BackgroundColor3 = Color3.fromRGB(88, 101, 242),
+			Size = UDim2.new(0, 24, 0, 24),
 			Position = UDim2.new(0, 8, 0.5, 0),
 			AnchorPoint = Vector2.new(0, 0.5),
 			Parent = discordRow,
 		})
-		Util.Corner(discordIcon, 6)
+		Util.Corner(discordIcon, R.xs)
 		Util.Create("TextLabel", {
-			BackgroundTransparency = 1,
-			Text = "D",
-			Font = theme.FontBold,
-			TextSize = 12,
-			TextColor3 = Color3.new(1, 1, 1),
-			Size = UDim2.new(1, 0, 1, 0),
-			Parent = discordIcon,
+			BackgroundTransparency = 1, Text = "D", Font = theme.FontBold, TextSize = 13,
+			TextColor3 = Color3.new(1, 1, 1), Size = UDim2.new(1, 0, 1, 0), Parent = discordIcon,
 		})
-
 		Util.Create("TextLabel", {
 			BackgroundTransparency = 1,
 			Text = opts.Discord,
 			Font = theme.FontSemibold,
 			TextSize = 11,
 			TextColor3 = theme.TextSecondary,
-			Size = UDim2.new(1, -42, 1, 0),
-			Position = UDim2.new(0, 38, 0, 0),
+			Size = UDim2.new(1, -44, 1, 0),
+			Position = UDim2.new(0, 40, 0, 0),
 			TextXAlignment = Enum.TextXAlignment.Left,
 			Parent = discordRow,
 		})
-
 		discordRow.MouseButton1Click:Connect(function()
 			local copied = false
 			pcall(function()
-				if typeof(setclipboard) == "function" then
-					setclipboard(opts.Discord)
-					copied = true
-				end
+				if typeof(setclipboard) == "function" then setclipboard(opts.Discord); copied = true end
 			end)
-			self:Notify({
-				Title = "Discord",
-				Content = copied and "Link disalin ke clipboard." or opts.Discord,
-				Type = "Info",
-				Duration = 3,
-			})
+			self:Notify({ Title = "Discord", Content = copied and "Link disalin ke clipboard." or opts.Discord, Type = "Info", Duration = 3 })
 		end)
 	end
 
-	--------------------------------------------------------------
+	----------------------------------------------------------------
 	-- CONTENT PANEL (kanan)
-	--------------------------------------------------------------
+	----------------------------------------------------------------
 	local content = Util.Create("Frame", {
 		Name = "Content",
 		BackgroundColor3 = theme.Background,
 		Size = UDim2.new(1, -sidebarWidth, 1, 0),
 		Position = UDim2.new(0, sidebarWidth, 0, 0),
-		Parent = root,
+		ZIndex = ZLayer.Base,
+		Parent = surface,
 	})
 	self.Content = content
 
-	-- Topbar: search, close
-	local topbar = Util.Create("Frame", {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 56),
-		Parent = content,
+	local topbar = Util.Create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 62), Parent = content })
+	Util.Padding(topbar, 0, 26, 26, 14, 0)
+
+	local closeBtn = Util.Create("TextButton", {
+		BackgroundColor3 = theme.PanelSecondary,
+		Size = UDim2.new(0, 36, 0, 36),
+		Position = UDim2.new(1, 0, 0, 0),
+		AnchorPoint = Vector2.new(1, 0),
+		Text = "",
+		AutoButtonColor = false,
+		Parent = topbar,
 	})
-	Util.Padding(topbar, 0, 24, 24, 12, 0)
+	Util.Corner(closeBtn, R.sm)
+	Util.Create("TextLabel", {
+		BackgroundTransparency = 1,
+		Text = "✕",
+		Font = theme.FontBold,
+		TextSize = 15,
+		TextColor3 = theme.TextSecondary,
+		Size = UDim2.new(1, 0, 1, 0),
+		Name = "Icon",
+		Parent = closeBtn,
+	})
+	closeBtn.MouseEnter:Connect(function()
+		Util.QuickTween(closeBtn, { BackgroundColor3 = theme.Error }, 0.15)
+		Util.QuickTween(closeBtn.Icon, { TextColor3 = Color3.new(1, 1, 1) }, 0.15)
+	end)
+	closeBtn.MouseLeave:Connect(function()
+		Util.QuickTween(closeBtn, { BackgroundColor3 = theme.PanelSecondary }, 0.15)
+		Util.QuickTween(closeBtn.Icon, { TextColor3 = theme.TextSecondary }, 0.15)
+	end)
+	closeBtn.MouseButton1Click:Connect(function() self:Close() end)
+
+	local minimizeBtn = Util.Create("TextButton", {
+		BackgroundColor3 = theme.PanelSecondary,
+		Size = UDim2.new(0, 36, 0, 36),
+		Position = UDim2.new(1, -46, 0, 0),
+		AnchorPoint = Vector2.new(1, 0),
+		Text = "–",
+		Font = theme.FontBold,
+		TextSize = 17,
+		TextColor3 = theme.TextSecondary,
+		AutoButtonColor = false,
+		Parent = topbar,
+	})
+	Util.Corner(minimizeBtn, R.sm)
+	Util.Hover(minimizeBtn, theme.PanelSecondary, theme.PanelHover)
+	minimizeBtn.MouseButton1Click:Connect(function() self:ToggleMinimize() end)
 
 	local searchBox = Util.Create("Frame", {
 		BackgroundColor3 = theme.PanelSecondary,
-		Size = UDim2.new(0, 240, 0, 32),
-		Position = UDim2.new(1, -276, 0, 0),
+		Size = UDim2.new(0, 230, 0, 36),
+		Position = UDim2.new(1, -102, 0, 0),
+		AnchorPoint = Vector2.new(1, 0),
 		Parent = topbar,
 	})
-	Util.Corner(searchBox, 8)
-	Util.Stroke(searchBox, theme.Stroke, 1)
+	Util.Corner(searchBox, R.sm)
+	local searchStroke = Util.Stroke(searchBox, theme.Stroke, 1)
 	local searchInput = Util.Create("TextBox", {
 		BackgroundTransparency = 1,
-		PlaceholderText = "Search...",
+		PlaceholderText = "Search components...",
 		Text = "",
 		Font = theme.Font,
 		TextSize = 12,
@@ -1810,74 +1870,29 @@ function Window.new(opts)
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Parent = searchBox,
 	})
+	searchInput.Focused:Connect(function() Util.QuickTween(searchStroke, { Color = theme.Accent }, 0.12) end)
+	searchInput.FocusLost:Connect(function() Util.QuickTween(searchStroke, { Color = theme.Stroke }, 0.12) end)
 	self.SearchInput = searchInput
 
-	local closeBtn = Util.Create("TextButton", {
-		BackgroundColor3 = theme.PanelSecondary,
-		Size = UDim2.new(0, 32, 0, 32),
-		Position = UDim2.new(1, -32, 0, 0),
-		Text = "✕",
-		Font = theme.FontBold,
-		TextSize = 14,
-		TextColor3 = theme.TextSecondary,
-		AutoButtonColor = false,
-		Parent = topbar,
-	})
-	Util.Corner(closeBtn, 8)
-	Util.Hover(closeBtn, theme.PanelSecondary, theme.Error)
-	closeBtn.MouseButton1Click:Connect(function() self:Close() end)
-
-	local minimizeBtn = Util.Create("TextButton", {
-		BackgroundColor3 = theme.PanelSecondary,
-		Size = UDim2.new(0, 32, 0, 32),
-		Position = UDim2.new(1, -70, 0, 0),
-		Text = "–",
-		Font = theme.FontBold,
-		TextSize = 16,
-		TextColor3 = theme.TextSecondary,
-		AutoButtonColor = false,
-		Parent = topbar,
-	})
-	Util.Corner(minimizeBtn, 8)
-	Util.Hover(minimizeBtn, theme.PanelSecondary, theme.PanelHover)
-	minimizeBtn.MouseButton1Click:Connect(function() self:ToggleMinimize() end)
-
-	-- Judul halaman + subtitle + status
-	local header = Util.Create("Frame", {
-		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 56),
-		Position = UDim2.new(0, 0, 0, 56),
-		Parent = content,
-	})
-	Util.Padding(header, 0, 24, 24, 0, 0)
+	local header = Util.Create("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 54), Position = UDim2.new(0, 0, 0, 62), Parent = content })
+	Util.Padding(header, 0, 26, 26, 0, 0)
 
 	local pageTitle = Util.Create("TextLabel", {
-		BackgroundTransparency = 1,
-		Text = "",
-		Font = theme.FontBold,
-		TextSize = 26,
-		TextColor3 = theme.TextPrimary,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(0.6, 0, 0, 32),
-		Parent = header,
+		BackgroundTransparency = 1, Text = "", Font = theme.FontBold, TextSize = 25, TextColor3 = theme.TextPrimary,
+		TextXAlignment = Enum.TextXAlignment.Left, Size = UDim2.new(0.55, 0, 0, 30), Parent = header,
 	})
 	local pageSubtitle = Util.Create("TextLabel", {
-		BackgroundTransparency = 1,
-		Text = "",
-		Font = theme.Font,
-		TextSize = 13,
-		TextColor3 = theme.TextSecondary,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(0.6, 0, 0, 18),
-		Position = UDim2.new(0, 0, 0, 32),
-		Parent = header,
+		BackgroundTransparency = 1, Text = "", Font = theme.Font, TextSize = 13, TextColor3 = theme.TextSecondary,
+		TextXAlignment = Enum.TextXAlignment.Left, Size = UDim2.new(0.55, 0, 0, 16), Position = UDim2.new(0, 0, 0, 30), Parent = header,
 	})
+	self.PageTitle, self.PageSubtitle = pageTitle, pageSubtitle
 
-	-- Baris status: dua "pill" (badge berlatar warna) -> Online/Offline & Updated/Outdated
+	-- Status pills (Online/Offline & Updated/Outdated) di kanan header.
 	local statusRow = Util.Create("Frame", {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(0, 220, 0, 22),
-		Position = UDim2.new(1, -220, 0, 2),
+		Size = UDim2.new(0, 230, 0, 22),
+		Position = UDim2.new(1, 0, 0, 2),
+		AnchorPoint = Vector2.new(1, 0),
 		Parent = header,
 	})
 	Util.Create("UIListLayout", {
@@ -1888,114 +1903,34 @@ function Window.new(opts)
 		Parent = statusRow,
 	})
 
-	-- Factory pill kecil dipakai untuk kedua badge (menghindari duplikasi)
-	local function makeStatusPill(text, color)
-		local pill = Util.Create("Frame", {
-			BackgroundColor3 = color,
-			BackgroundTransparency = 0.85,
-			Size = UDim2.new(0, 0, 1, 0),
-			AutomaticSize = Enum.AutomaticSize.X,
-			Parent = statusRow,
-		})
-		Util.Corner(pill, 999)
-		Util.Stroke(pill, color, 1, 0.5)
-		Util.Padding(pill, 0, 10, 10, 0, 0)
-
-		local dot = Util.Create("Frame", {
-			BackgroundColor3 = color,
-			Size = UDim2.new(0, 7, 0, 7),
-			Position = UDim2.new(0, 0, 0.5, 0),
-			AnchorPoint = Vector2.new(0, 0.5),
-			Parent = pill,
-		})
-		Util.Corner(dot, 999)
-		-- Glow halus di sekitar dot untuk kesan "online" yang hidup
-		local dotGlow = Util.Create("ImageLabel", {
-			BackgroundTransparency = 1,
-			Image = "rbxassetid://6014261993",
-			ImageColor3 = color,
-			ImageTransparency = 0.4,
-			ScaleType = Enum.ScaleType.Slice,
-			SliceCenter = Rect.new(49, 49, 450, 450),
-			Size = UDim2.new(0, 22, 0, 22),
-			Position = UDim2.new(0.5, 0, 0.5, 0),
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			ZIndex = dot.ZIndex - 1,
-			Parent = dot,
-		})
-
-		local label = Util.Create("TextLabel", {
-			BackgroundTransparency = 1,
-			Text = text,
-			Font = theme.FontSemibold,
-			TextSize = 11,
-			TextColor3 = color,
-			Size = UDim2.new(0, 0, 1, 0),
-			AutomaticSize = Enum.AutomaticSize.X,
-			Position = UDim2.new(0, 13, 0, 0),
-			TextXAlignment = Enum.TextXAlignment.Left,
-			Parent = pill,
-		})
-
-		-- Denyut lembut pada dot supaya terasa "live"
-		task.spawn(function()
-			while dot.Parent do
-				Util.QuickTween(dotGlow, { ImageTransparency = 0.75 }, 0.9)
-				task.wait(0.9)
-				if not dot.Parent then break end
-				Util.QuickTween(dotGlow, { ImageTransparency = 0.4 }, 0.9)
-				task.wait(0.9)
-			end
-		end)
-
-		return pill, label, dot
-	end
-
 	local statusOpts = opts.Status or {}
-	local isOnline = statusOpts.Online
-	if isOnline == nil then isOnline = true end
-	local isUpdated = statusOpts.Updated
-	if isUpdated == nil then isUpdated = true end
+	local isOnline = statusOpts.Online; if isOnline == nil then isOnline = true end
+	local isUpdated = statusOpts.Updated; if isUpdated == nil then isUpdated = true end
 
-	local onlinePill, onlineLabel = makeStatusPill(isOnline and "ONLINE" or "OFFLINE", isOnline and theme.Success or theme.Error)
-	local updatePill, updateLabel = makeStatusPill(isUpdated and "UPDATED" or "OUTDATED", isUpdated and theme.Success or theme.Warning)
+	self.OnlinePill = Util.MakeStatusPill(statusRow, theme, isOnline and "ONLINE" or "OFFLINE", isOnline and theme.Success or theme.Error)
+	self.UpdatePill = Util.MakeStatusPill(statusRow, theme, isUpdated and "UPDATED" or "OUTDATED", isUpdated and theme.Success or theme.Warning)
 
-	self.PageTitle, self.PageSubtitle = pageTitle, pageSubtitle
-	self.OnlinePill, self.OnlineLabel = onlinePill, onlineLabel
-	self.UpdatePill, self.UpdateLabel = updatePill, updateLabel
-
-	-- Ubah status online/update kapan saja, mis. Window:SetStatus(true, false)
+	-- Ubah status kapan saja, mis. Window:SetStatus(true, false)
 	function self:SetStatus(online, updated)
 		if online ~= nil then
-			local c = online and theme.Success or theme.Error
-			onlineLabel.Text = online and "ONLINE" or "OFFLINE"
-			onlineLabel.TextColor3 = c
-			onlinePill.BackgroundColor3 = c
-			onlinePill.UIStroke.Color = c
+			self.OnlinePill:Set(online and "ONLINE" or "OFFLINE", online and theme.Success or theme.Error)
 		end
 		if updated ~= nil then
-			local c = updated and theme.Success or theme.Warning
-			updateLabel.Text = updated and "UPDATED" or "OUTDATED"
-			updateLabel.TextColor3 = c
-			updatePill.BackgroundColor3 = c
-			updatePill.UIStroke.Color = c
+			self.UpdatePill:Set(updated and "UPDATED" or "OUTDATED", updated and theme.Success or theme.Warning)
 		end
 	end
 
-	-- Container halaman (tempat semua Tab.Page berada, hanya 1 yang Visible)
 	local pageContainer = Util.Create("Frame", {
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 1, -128),
-		Position = UDim2.new(0, 0, 0, 120),
+		Size = UDim2.new(1, 0, 1, -136),
+		Position = UDim2.new(0, 0, 0, 132),
 		Parent = content,
 	})
 	self.PageContainer = pageContainer
 
-	-- Notification & Dialog subsystem
 	self.Notifications = Notification.new(gui, theme)
 	self.Dialogs = Dialog.new(gui, theme)
 
-	-- Watermark (opsional)
 	if opts.Watermark ~= false then
 		local watermark = Util.Create("TextLabel", {
 			BackgroundColor3 = theme.PanelSecondary,
@@ -2008,40 +1943,37 @@ function Window.new(opts)
 			Position = UDim2.new(0, 16, 0, 16),
 			Parent = gui,
 		})
-		Util.Corner(watermark, 8)
+		Util.Corner(watermark, R.sm)
 		Util.Stroke(watermark, theme.Stroke, 1)
 		self.Watermark = watermark
 	end
 
-	-- Realtime search: filter card komponen berdasarkan judul
+	-- Search realtime: filter card komponen berdasarkan judul.
 	searchInput:GetPropertyChangedSignal("Text"):Connect(function()
 		local query = searchInput.Text:lower()
 		for _, entry in ipairs(self.SearchRegistry) do
-			local matches = query == "" or entry.Title:find(query, 1, true) ~= nil
-			entry.Instance.Visible = matches
+			entry.Instance.Visible = query == "" or entry.Title:find(query, 1, true) ~= nil
 		end
 	end)
 
 	self.Minimized = false
 	self.PrevSize = root.Size
 
+	if IS_MOBILE then
+		task.defer(function() self:ToggleSidebar() end)
+	end
+
 	return self
 end
 
 function Window:ToggleSidebar()
 	self.SidebarCollapsed = not self.SidebarCollapsed
-	local target = self.SidebarCollapsed and 72 or self.SidebarWidth
+	local target = self.SidebarCollapsed and 76 or self.SidebarWidth
 	Util.QuickTween(self.Sidebar, { Size = UDim2.new(0, target, 1, 0) }, 0.25)
-	Util.QuickTween(self.Content, {
-		Size = UDim2.new(1, -target, 1, 0),
-		Position = UDim2.new(0, target, 0, 0),
-	}, 0.25)
-	Util.QuickTween(self.BrandFrame, { GroupTransparency = self.SidebarCollapsed and 1 or 0 }, 0.2)
+	Util.QuickTween(self.Content, { Size = UDim2.new(1, -target, 1, 0), Position = UDim2.new(0, target, 0, 0) }, 0.25)
 	self.BrandFrame.Visible = not self.SidebarCollapsed
-	for _, tab in pairs(self.Tabs) do
-		if tab.LabelHolder then
-			tab.LabelHolder.Visible = not self.SidebarCollapsed
-		end
+	for _, tab in ipairs(self.Tabs) do
+		tab.LabelHolder.Visible = not self.SidebarCollapsed
 	end
 end
 
@@ -2049,7 +1981,7 @@ function Window:ToggleMinimize()
 	self.Minimized = not self.Minimized
 	if self.Minimized then
 		self.PrevSize = self.Root.Size
-		Util.QuickTween(self.Root, { Size = UDim2.new(0, self.Root.AbsoluteSize.X, 0, 56) }, 0.25)
+		Util.QuickTween(self.Root, { Size = UDim2.new(0, self.Root.AbsoluteSize.X, 0, 64) }, 0.25)
 	else
 		Util.QuickTween(self.Root, { Size = self.PrevSize }, 0.25)
 	end
@@ -2057,9 +1989,7 @@ end
 
 function Window:Close()
 	Util.QuickTween(self.Root, { Size = UDim2.new(self.Root.Size.X.Scale, self.Root.Size.X.Offset, 0, 0) }, 0.25)
-	task.delay(0.25, function()
-		self.Gui.Enabled = false
-	end)
+	task.delay(0.25, function() self.Gui.Enabled = false end)
 end
 
 function Window:Notify(opts)
@@ -2073,17 +2003,17 @@ end
 function Window:CreateTab(opts)
 	opts = opts or {}
 	local theme = self.Theme
+	local R = theme.Radius
 
-	-- Card di sidebar
 	local card = Util.Create("TextButton", {
 		BackgroundColor3 = theme.PanelSecondary,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 56),
+		Size = UDim2.new(1, 0, 0, 60),
 		Text = "",
 		AutoButtonColor = false,
 		Parent = self.TabList,
 	})
-	Util.Corner(card, 10)
+	Util.Corner(card, R.md)
 	local cardStroke = Util.Stroke(card, theme.Accent, 1, 1)
 	local activeBar = Util.Create("Frame", {
 		BackgroundColor3 = theme.Accent,
@@ -2092,21 +2022,21 @@ function Window:CreateTab(opts)
 		AnchorPoint = Vector2.new(0, 0.5),
 		Parent = card,
 	})
-	Util.Corner(activeBar, 2)
+	Util.Corner(activeBar, R.xs)
 
 	local iconHolder = Util.Create("Frame", {
 		BackgroundColor3 = theme.PanelTertiary,
-		Size = UDim2.new(0, 36, 0, 36),
+		Size = UDim2.new(0, 40, 0, 40),
 		Position = UDim2.new(0, 10, 0.5, 0),
 		AnchorPoint = Vector2.new(0, 0.5),
 		Parent = card,
 	})
-	Util.Corner(iconHolder, 8)
+	Util.Corner(iconHolder, R.sm)
 	local iconImage = Util.Create("ImageLabel", {
 		BackgroundTransparency = 1,
 		Image = opts.Icon and NovaUI:GetIcon(opts.Icon) or "",
 		ImageColor3 = theme.TextSecondary,
-		Size = UDim2.new(0, 18, 0, 18),
+		Size = UDim2.new(0, 19, 0, 19),
 		Position = UDim2.new(0.5, 0, 0.5, 0),
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Parent = iconHolder,
@@ -2115,9 +2045,10 @@ function Window:CreateTab(opts)
 	local labelHolder = Util.Create("Frame", {
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, -66, 1, 0),
-		Position = UDim2.new(0, 56, 0, 0),
+		Position = UDim2.new(0, 60, 0, 0),
 		Parent = card,
 	})
+	Util.Create("UIListLayout", { VerticalAlignment = Enum.VerticalAlignment.Center, Parent = labelHolder })
 	Util.Create("TextLabel", {
 		BackgroundTransparency = 1,
 		Text = opts.Title or "Tab",
@@ -2125,7 +2056,7 @@ function Window:CreateTab(opts)
 		TextSize = 13,
 		TextColor3 = theme.TextPrimary,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, 0, 0.55, 0),
+		Size = UDim2.new(1, 0, 0, 18),
 		Parent = labelHolder,
 	})
 	Util.Create("TextLabel", {
@@ -2135,24 +2066,17 @@ function Window:CreateTab(opts)
 		TextSize = 11,
 		TextColor3 = theme.TextTertiary,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, 0, 0.45, 0),
-		Position = UDim2.new(0, 0, 0.55, 0),
+		Size = UDim2.new(1, 0, 0, 15),
 		Parent = labelHolder,
 	})
-	Util.Create("UIListLayout", { FillDirection = Enum.FillDirection.Vertical, VerticalAlignment = Enum.VerticalAlignment.Center, Parent = labelHolder })
 
 	card.MouseEnter:Connect(function()
-		if self.ActiveTab ~= card then
-			Util.QuickTween(card, { BackgroundTransparency = 0 }, 0.15)
-		end
+		if self.ActiveTab ~= card then Util.QuickTween(card, { BackgroundTransparency = 0 }, 0.15) end
 	end)
 	card.MouseLeave:Connect(function()
-		if self.ActiveTab ~= card then
-			Util.QuickTween(card, { BackgroundTransparency = 1 }, 0.15)
-		end
+		if self.ActiveTab ~= card then Util.QuickTween(card, { BackgroundTransparency = 1 }, 0.15) end
 	end)
 
-	-- Halaman konten milik tab ini
 	local page = Util.Create("ScrollingFrame", {
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 1, 0),
@@ -2163,12 +2087,8 @@ function Window:CreateTab(opts)
 		Visible = false,
 		Parent = self.PageContainer,
 	})
-	Util.Padding(page, 0, 24, 24, 0, 24)
-	Util.Create("UIListLayout", {
-		Padding = UDim.new(0, 14),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = page,
-	})
+	Util.Padding(page, 0, 26, 26, 4, 26)
+	Util.Create("UIListLayout", { Padding = UDim.new(0, 18), SortOrder = Enum.SortOrder.LayoutOrder, Parent = page })
 
 	local tabObj = setmetatable({
 		Window = self,
@@ -2185,12 +2105,8 @@ function Window:CreateTab(opts)
 	}, TabObj)
 
 	table.insert(self.Tabs, tabObj)
+	card.MouseButton1Click:Connect(function() self:SelectTab(tabObj) end)
 
-	card.MouseButton1Click:Connect(function()
-		self:SelectTab(tabObj)
-	end)
-
-	-- Tab pertama otomatis aktif
 	if #self.Tabs == 1 then
 		self:SelectTab(tabObj)
 	end
@@ -2199,22 +2115,22 @@ function Window:CreateTab(opts)
 end
 
 function Window:SelectTab(tabObj)
+	local theme = self.Theme
 	for _, t in ipairs(self.Tabs) do
 		local isActive = t == tabObj
 		Util.QuickTween(t.Card, { BackgroundTransparency = isActive and 0 or 1 }, 0.2)
 		Util.QuickTween(t.CardStroke, { Transparency = isActive and 0.6 or 1 }, 0.2)
-		Util.QuickTween(t.ActiveBarInst, { Size = UDim2.new(0, 3, 0, isActive and 28 or 0) }, 0.2)
-		Util.QuickTween(t.IconHolder, { BackgroundColor3 = isActive and self.Theme.Accent or self.Theme.PanelTertiary }, 0.2)
-		Util.QuickTween(t.IconImage, { ImageColor3 = isActive and Color3.new(1, 1, 1) or self.Theme.TextSecondary }, 0.2)
+		Util.QuickTween(t.ActiveBarInst, { Size = UDim2.new(0, 3, 0, isActive and 30 or 0) }, 0.2)
+		Util.QuickTween(t.IconHolder, { BackgroundColor3 = isActive and theme.Accent or theme.PanelTertiary }, 0.2)
+		Util.QuickTween(t.IconImage, { ImageColor3 = isActive and Color3.new(1, 1, 1) or theme.TextSecondary }, 0.2)
 
 		if isActive then
 			t.Page.Visible = true
-		elseif t.Page.Visible and t ~= tabObj then
+		elseif t.Page.Visible then
 			t.Page.Visible = false
 		end
 	end
 
-	-- Fade-in halus (slide kecil) untuk halaman yang baru dibuka
 	tabObj.Page.Position = UDim2.new(0, 8, 0, 0)
 	Util.QuickTween(tabObj.Page, { Position = UDim2.new(0, 0, 0, 0) }, 0.22)
 
