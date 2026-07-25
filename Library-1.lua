@@ -3,7 +3,21 @@
 	 EWEHUB
 	 UI Library untuk Roblox — dibuat murni dengan Luau.
 	 Dibuat oleh: Asep
-	 Versi: 4.6.0
+	 Versi: 4.7.0
+
+	 CATATAN PERUBAHAN v4.7.0:
+	 1. Mode micro-minimize (tombol —) BALIK jadi ikon bulat mengambang
+	    terpisah (seperti versi lama), bisa di-drag ke mana aja, dengan
+	    animasi "pop" yang smooth (Back easing) pas muncul/hilang. Emoji-
+	    nya sekarang BISA DIATUR developer lewat config.Icon (default 🚀),
+	    jadi gak lagi hardcoded satu emoji buat semua script.
+	 2. Compact-minimize (tombol □) TETAP seperti v4.5/4.6 (pill kecil
+	    di tempat yang sama) — gak berubah, cocok kalau masih mau lirik
+	    sekilas tanpa geser-geser ikon.
+	 3. Cutscene pembuka sekarang pakai emoji yang sama (config.Icon) buat
+	    logo-nya, dan subtitle-nya diganti jadi "Library by EWEHUB" —
+	    biar jelas: judul besar = nama custom developer, subtitle kecil
+	    = brand library-nya, konsisten sama prinsip yang sama di Watermark.
 
 	 CATATAN PERUBAHAN v4.6.0:
 	 1. FIX: mode micro-minimize dulu kelihatan kayak "blob"/tonjolan
@@ -129,7 +143,7 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 local EWEHUB = {}
 EWEHUB.__index = EWEHUB
 
-EWEHUB.Version  = "4.6.0"
+EWEHUB.Version  = "4.7.0"
 EWEHUB.Author   = "Asep"
 EWEHUB.Windows  = {}
 EWEHUB.Flags    = {}
@@ -164,6 +178,7 @@ local FastTween   = TweenInfo.new(0.16, Enum.EasingStyle.Quad,  Enum.EasingDirec
 local MediumTween = TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 local SlowTween   = TweenInfo.new(0.42, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 local SoftTween   = TweenInfo.new(0.35, Enum.EasingStyle.Sine,  Enum.EasingDirection.InOut)
+local PopTween    = TweenInfo.new(0.4,  Enum.EasingStyle.Back,  Enum.EasingDirection.Out)
 
 --============================================================
 -- UTIL
@@ -572,7 +587,7 @@ end
 --============================================================
 -- OPENING CUTSCENE (fade in/out + logo + tombol Skip)
 --============================================================
-local function PlayCutscene(screenGui, windowName, callback)
+local function PlayCutscene(screenGui, windowName, iconEmoji, callback)
 	local Splash = New("Frame", {
 		Size = UDim2.new(1, 0, 1, 0),
 		BackgroundColor3 = EWEHUB.Theme.Background,
@@ -581,7 +596,8 @@ local function PlayCutscene(screenGui, windowName, callback)
 		Parent = screenGui,
 	})
 
-	-- "Logo" sederhana: lingkaran ber-accent + inisial, tanpa aset eksternal
+	-- "Logo" sederhana: lingkaran ber-accent + emoji (bisa diatur developer
+	-- lewat config.Icon), tanpa aset gambar eksternal.
 	local LogoRing = New("Frame", {
 		Size = UDim2.new(0, 64, 0, 64),
 		Position = UDim2.new(0.5, -32, 0.5, -78),
@@ -592,7 +608,7 @@ local function PlayCutscene(screenGui, windowName, callback)
 	}, { Corner(32), Stroke(EWEHUB.Theme.Accent, 2) })
 
 	local LogoText = New("TextLabel", {
-		Text = "E",
+		Text = iconEmoji,
 		Font = Enum.Font.GothamBlack,
 		TextSize = 30,
 		TextColor3 = EWEHUB.Theme.Accent,
@@ -616,8 +632,11 @@ local function PlayCutscene(screenGui, windowName, callback)
 		Parent = Splash,
 	})
 
+	-- Subtitle SENGAJA selalu "Library by EWEHUB" (brand library-nya),
+	-- BUKAN windowName — judul custom developer sudah ditampilkan di
+	-- Title di atas. Konsisten sama prinsip yang sama dipakai Watermark.
 	local Subtitle = New("TextLabel", {
-		Text = "by " .. EWEHUB.Author .. "  •  v" .. EWEHUB.Version,
+		Text = "Library by EWEHUB  •  v" .. EWEHUB.Version,
 		Font = Enum.Font.Gotham,
 		TextSize = 13,
 		TextColor3 = EWEHUB.Theme.SubText,
@@ -906,6 +925,7 @@ function EWEHUB:CreateWindow(config)
 	config = config or {}
 	local windowName  = config.Name or "EWEHUB"
 	local toggleKey   = config.ToggleKey or Enum.KeyCode.RightControl
+	local iconEmoji   = config.Icon or "🚀" -- emoji bebas diatur developer, lihat Notes v4.7.0
 	local Theme       = self.Theme
 	local discordCfg  = config.Discord -- { Enabled, Invite, Interval }
 
@@ -999,6 +1019,23 @@ function EWEHUB:CreateWindow(config)
 		end
 	end)
 
+	-- Ikon mengambang buat mode "micro" — TERPISAH dari Main, bisa di-drag
+	-- sendiri, munculnya pakai animasi "pop" (Back easing) yang smooth.
+	-- Emoji-nya bisa diatur developer lewat config.Icon (default 🚀).
+	local FloatIcon = New("TextButton", {
+		Name = "FloatIcon",
+		Text = iconEmoji,
+		Font = Enum.Font.GothamBold,
+		TextSize = 22,
+		BackgroundColor3 = Theme.Panel,
+		Size = UDim2.new(0, 0, 0, 0),
+		Position = UDim2.new(0, 20, 0.5, -25),
+		Visible = false,
+		AutoButtonColor = false,
+		Parent = ScreenGui,
+	}, { Corner(25), Stroke(Theme.Accent, 1.5) })
+	MakeDraggable(FloatIcon, FloatIcon)
+
 	-- Tiga tombol wajib ala title bar OS: [—] micro-minimize,
 	-- [□] compact-minimize, [✕] close (selalu merah, bukan cuma pas hover).
 	local CloseBtn = New("TextButton", {
@@ -1050,17 +1087,20 @@ function EWEHUB:CreateWindow(config)
 
 	local TopBarHeight = 42
 	local CompactWidth = IsMobile() and 170 or 200
-	local MicroWidth = TopBarHeight -- persegi sempurna, di-radius jadi lingkaran penuh
 
-	-- State machine 3 tingkat (ala title bar OS, lebih ringan buat hp
-	-- low-end daripada bikin objek/ScreenGui terpisah kayak versi lama):
+	-- State machine 3 tingkat (lebih ringan buat hp low-end drpd bikin
+	-- ScreenGui terpisah tiap kali toggle):
 	--   "full"    -> window normal, semua isi kelihatan
-	--   "compact" -> pill kecil (~200px), judul + 1 tombol restore
-	--   "micro"   -> lingkaran kecil (42x42), cuma 1 tombol restore
+	--   "compact" -> pill kecil (~200px) DI TEMPAT YANG SAMA, judul + 1
+	--                tombol restore (cocok kalau masih mau lihat sekilas)
+	--   "micro"   -> Main disembunyikan total, diganti FloatIcon kecil
+	--                yang bisa di-drag ke mana aja (cocok kalau mau
+	--                bener-bener minim mengganggu pandangan)
 	local windowState = "full"
 
 	local function SetWindowState(target)
 		if target == windowState then return end
+		local previousState = windowState
 		windowState = target
 
 		if target == "full" then
@@ -1072,44 +1112,62 @@ function EWEHUB:CreateWindow(config)
 			AccentDot.Visible = true
 			TitleLabel.Visible = true
 			FlattenPatch.Visible = true
-			if TabList then TabList.Visible = true end
-			if ContentArea then ContentArea.Visible = true end
 			Tween(MainCorner, FastTween, { CornerRadius = UDim.new(0, 16) })
-			Tween(Main, SlowTween, { Size = windowSize })
-		else
-			-- Sembunyikan semua elemen judul + 2 dari 3 tombol, sisain cuma
-			-- tombol restore-nya. FlattenPatch WAJIB disembunyikan juga,
-			-- soalnya kalau enggak dia nongol lewat sudut rounded dan bikin
-			-- bentuk aneh (lihat komentar di deklarasi FlattenPatch).
+
+			if previousState == "micro" then
+				-- Balik dari FloatIcon: pop-out ikon, pop-in window
+				Tween(FloatIcon, FastTween, { Size = UDim2.new(0, 0, 0, 0) })
+				task.delay(0.14, function()
+					FloatIcon.Visible = false
+					Main.Visible = true
+					Main.Size = UDim2.new(windowSize.X.Scale, windowSize.X.Offset, 0, 0)
+					Main.BackgroundTransparency = 1
+					if TabList then TabList.Visible = true end
+					if ContentArea then ContentArea.Visible = true end
+					Tween(Main, PopTween, { Size = windowSize, BackgroundTransparency = 0 })
+				end)
+			else
+				if TabList then TabList.Visible = true end
+				if ContentArea then ContentArea.Visible = true end
+				Tween(Main, SlowTween, { Size = windowSize })
+			end
+		elseif target == "compact" then
+			-- Pill kecil DI TEMPAT YANG SAMA (Main tetap kelihatan, cuma diresize)
 			AccentDot.Visible = false
 			TitleLabel.Visible = false
 			FlattenPatch.Visible = false
-			MicroBtn.Visible = (target == "micro")
-			CompactBtn.Visible = (target == "compact")
+			MicroBtn.Visible = false
+			CompactBtn.Visible = true
 			CloseBtn.Visible = false
 
-			local targetWidth = (target == "compact") and CompactWidth or MicroWidth
-			local restoreBtn = (target == "compact") and CompactBtn or MicroBtn
-			local restorePos = (target == "compact")
-				and UDim2.new(1, -37, 0.5, -14)   -- pill: tombol nempel kanan
-				or UDim2.new(0.5, -14, 0.5, -14)  -- lingkaran: tombol di tengah
-
-			Tween(restoreBtn, MediumTween, { Position = restorePos })
-			Tween(Main, MediumTween, { Size = UDim2.new(0, targetWidth, 0, TopBarHeight) })
-			-- Compact tetap rectangular (radius 16 masih proporsional buat
-			-- lebar ~200px), Micro dibikin lingkaran penuh (radius = setengah lebar).
-			Tween(MainCorner, MediumTween, {
-				CornerRadius = (target == "micro") and UDim.new(0, MicroWidth / 2) or UDim.new(0, 16),
-			})
+			Tween(CompactBtn, MediumTween, { Position = UDim2.new(1, -37, 0.5, -14) })
+			Tween(Main, MediumTween, { Size = UDim2.new(0, CompactWidth, 0, TopBarHeight) })
+			Tween(MainCorner, MediumTween, { CornerRadius = UDim.new(0, 16) })
 
 			task.delay(0.2, function()
-				if windowState == target then
+				if windowState == "compact" then
 					if TabList then TabList.Visible = false end
 					if ContentArea then ContentArea.Visible = false end
 				end
 			end)
+		elseif target == "micro" then
+			-- Main disembunyikan TOTAL, diganti FloatIcon yang pop-in smooth
+			-- (persis kayak versi lama, tapi emoji-nya bisa diatur developer)
+			Tween(Main, MediumTween, { Size = UDim2.new(Main.Size.X.Scale, Main.Size.X.Offset, 0, 0), BackgroundTransparency = 1 })
+			task.delay(0.22, function()
+				if windowState ~= "micro" then return end
+				Main.Visible = false
+				if TabList then TabList.Visible = false end
+				if ContentArea then ContentArea.Visible = false end
+				FloatIcon.Visible = true
+				Tween(FloatIcon, PopTween, { Size = UDim2.new(0, 50, 0, 50) })
+			end)
 		end
 	end
+
+	FloatIcon.MouseButton1Click:Connect(function()
+		SetWindowState("full")
+	end)
 
 	CompactBtn.MouseButton1Click:Connect(function()
 		SetWindowState(windowState == "compact" and "full" or "compact")
@@ -2430,7 +2488,7 @@ function EWEHUB:CreateWindow(config)
 	Main.Size = UDim2.new(windowSize.X.Scale, windowSize.X.Offset, 0, 0)
 	Main.BackgroundTransparency = 1
 
-	PlayCutscene(ScreenGui, windowName, function()
+	PlayCutscene(ScreenGui, windowName, iconEmoji, function()
 		Tween(Main, SlowTween, { Size = windowSize, BackgroundTransparency = 0 })
 
 		if discordCfg and discordCfg.Enabled then
